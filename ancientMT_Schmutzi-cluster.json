@@ -1,0 +1,50 @@
+{
+    "__default__" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G",
+        "class"  : "*"  
+    },
+
+    "extract_MT_reads" :
+    {
+        "vfree"  : "2G",
+        "hvmem"  : "2G"
+    },
+
+    "realign_MT_long" :
+    {
+        "vfree"  : "8G",
+        "hvmem"  : "8G"
+    },
+
+    "schmutzi_prof" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "contDeam" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "schmutzi_nopred" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G"
+    },
+
+    "schmutzi_pred" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G"
+    },
+
+    "haplogrep" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G"
+    }
+}

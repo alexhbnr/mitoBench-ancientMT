@@ -1,0 +1,11 @@
+{
+    "sampleprefixes" : "",
+    "projdir" : "",
+    "tmpdir" : "",
+    "bamdir" : "",
+    "bamsuffix" : "bam",
+    "lengthDeam" : 5,
+    "library" : "single",
+    "mincov" : 2,
+    "constraints": "[A-Z0-9]+"
+}

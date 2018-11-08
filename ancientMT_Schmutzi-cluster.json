@@ -36,10 +36,10 @@
         "hvmem"  : "6G"
     },
 
-    "schmutzi_pred" :
+    "angsd_consensus" :
     {
-        "vfree"  : "6G",
-        "hvmem"  : "6G"
+        "vfree"  : "3G",
+        "hvmem"  : "3G"
     },
 
     "haplogrep" :

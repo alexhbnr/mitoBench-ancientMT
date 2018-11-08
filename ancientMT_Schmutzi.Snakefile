@@ -166,9 +166,10 @@ wildcard_constraints:
     bamsample = config['constraints']
 
 rule consensus_calling:
-    input:  expand("schmutzi/{schmutzi}-wpred_final_endo.fa", schmutzi=SCHMUTZI_SAMPLES),
+    input:  expand("schmutzi/{schmutzi}-npred_final_endo.fa", schmutzi=SCHMUTZI_SAMPLES),
+            expand("schmutzi/{schmutzi}-npred_final_endo.hsd", schmutzi=SCHMUTZI_SAMPLES),
             expand("schmutzi/{bamsample}_bamsample.vcf.gz", bamsample=BAMSAMPLE_SAMPLES+SCHMUTZI_SAMPLES),
-            expand("schmutzi/{schmutzi}-wpred_final_endo.hsd", schmutzi=SCHMUTZI_SAMPLES)
+            expand("schmutzi/{bamsample}_angsd.fa.gz", bamsample=BAMSAMPLE_SAMPLES+SCHMUTZI_SAMPLES)
 
 rule contDeam:
     output: "schmutzi/{schmutzi}.cont.est"
@@ -207,29 +208,9 @@ rule schmutzi_nopred:
                 {params.bam}
         """
 
-rule schmutzi_pred:
-    input: "schmutzi/{schmutzi}-npred_final_endo.fa"
-    output: "schmutzi/{schmutzi}-wpred_final_endo.fa"
-    message: "Run schmutzi without predicting the contamination: {wildcards.schmutzi}"
-    params: reffasta = "/mnt/solexa/Genomes/human_MT/whole_genome.fa",
-            bam = lambda wildcards: "bam/{schmutzi}.MT_long.bam".format(schmutzi=wildcards.schmutzi)
-    shell:
-        """
-        /mnt/genotyping/sk_pipelines/source/bin/schmutzi/src/schmutzi.pl \
-                --uselength \
-                --name {wildcards.schmutzi} \
-                --namec {wildcards.schmutzi}_cont \
-                --logindel 1 \
-                --ref {params.reffasta} \
-                --out schmutzi/{wildcards.schmutzi}-wpred \
-                schmutzi/{wildcards.schmutzi} \
-                /mnt/genotyping/sk_pipelines/source/bin/schmutzi/share/schmutzi/alleleFreqMT/eurasian/freqs/ \
-                {params.bam}
-        """
-
 rule haplogrep:
-    input: "schmutzi/{schmutzi}-wpred_final_endo.fa"
-    output: "schmutzi/{schmutzi}-wpred_final_endo.hsd"
+    input: "schmutzi/{schmutzi}-npred_final_endo.fa"
+    output: "schmutzi/{schmutzi}-npred_final_endo.hsd"
     message: "Run Haplogroup 2: {wildcards.schmutzi}"
     group: "hsd"
     shell:
@@ -259,6 +240,25 @@ rule bam_sample:
                     --mincov {params.mincov} | bgzip > {output}
         """
 
+rule angsd_consensus:
+    # Call consensus sequence as described by Ehler et al. (2018): amtDB 
+    output: "schmutzi/{bamsample}_angsd.fa.gz"
+    message: "Call consensus sequence using ANGSD following Ehler et al. (2018): {wildcards.bamsample}"
+    params: bam = lambda wildcards: "bam/{bamsample}.MT_long.bam".format(bamsample=wildcards.bamsample),
+            reffasta = "/mnt/solexa/Genomes/human_MT/whole_genome.fa",
+            dir = "schmutzi"
+    shell:
+        """
+        /mnt/genotyping/sk_pipelines/source/bin/angsd-0.923/angsd \
+                -i {params.bam} \
+                -minMapQ 30 \
+                -minQ 20 \
+                -doFasta 2 \
+                -doCounts 1 \
+                -ref {params.reffasta} \
+                -out {params.dir}/{wildcards.bamsample}_angsd
+        """
+
 ################################################################################
 
 
@@ -281,11 +281,10 @@ rule backup:
         echo "Move Schmutzi's consensus FastAs"
         mkdir -p {params.projdir}/fasta
         rsync -av schmutzi/*-npred_final_endo.{{fa,log}} {params.projdir}/fasta/
-        rsync -av schmutzi/*-wpred_final_endo.{{fa,log}} {params.projdir}/fasta/
+        rsync -av schmutzi/*_angsd.fa.gz {params.projdir}/fasta/
         echo "Move Schmutzi's contamination estimates"
         mkdir -p {params.projdir}/contamination
         rsync -av schmutzi/*-npred_final.cont.{{est,pdf}} {params.projdir}/contamination/
-        rsync -av schmutzi/*-wpred_final.cont.{{est,pdf}} {params.projdir}/contamination/
         echo "Move Haplogrep's haplogroup assignment"
         mkdir -p {params.projdir}/hsd
         rsync -av schmutzi/*-wpred_final_endo.hsd {params.projdir}/hsd/

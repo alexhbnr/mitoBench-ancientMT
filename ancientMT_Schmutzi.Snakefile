@@ -169,7 +169,7 @@ rule consensus_calling:
     input:  expand("schmutzi/{schmutzi}-npred_final_endo.fa", schmutzi=SCHMUTZI_SAMPLES),
             expand("schmutzi/{schmutzi}-npred_final_endo.hsd", schmutzi=SCHMUTZI_SAMPLES),
             expand("schmutzi/{bamsample}_bamsample.vcf.gz", bamsample=BAMSAMPLE_SAMPLES+SCHMUTZI_SAMPLES),
-            expand("schmutzi/{bamsample}_angsd.fa.gz", bamsample=BAMSAMPLE_SAMPLES+SCHMUTZI_SAMPLES)
+            expand("schmutzi/{bamsample}_angsd.fa", bamsample=BAMSAMPLE_SAMPLES+SCHMUTZI_SAMPLES)
 
 rule contDeam:
     output: "schmutzi/{schmutzi}.cont.est"
@@ -242,7 +242,7 @@ rule bam_sample:
 
 rule angsd_consensus:
     # Call consensus sequence as described by Ehler et al. (2018): amtDB 
-    output: "schmutzi/{bamsample}_angsd.fa.gz"
+    output: "schmutzi/{bamsample}_angsd.fa"
     message: "Call consensus sequence using ANGSD following Ehler et al. (2018): {wildcards.bamsample}"
     params: bam = lambda wildcards: "bam/{bamsample}.MT_long.bam".format(bamsample=wildcards.bamsample),
             reffasta = "/mnt/solexa/Genomes/human_MT/whole_genome.fa",
@@ -256,7 +256,10 @@ rule angsd_consensus:
                 -doFasta 2 \
                 -doCounts 1 \
                 -ref {params.reffasta} \
-                -out {params.dir}/{wildcards.bamsample}_angsd
+                -out {params.dir}/{wildcards.bamsample}_angsd.tmp
+        /mnt/genotyping/sk_pipelines/source/bin/bioawk \
+                -c fastx '{{print ">{wildcards.bamsample}"; print $seq}}' \
+                {params.dir}/{wildcards.bamsample}_angsd.tmp.fa.gz > {output}
         """
 
 ################################################################################
@@ -281,7 +284,7 @@ rule backup:
         echo "Move Schmutzi's consensus FastAs"
         mkdir -p {params.projdir}/fasta
         rsync -av schmutzi/*-npred_final_endo.{{fa,log}} {params.projdir}/fasta/
-        rsync -av schmutzi/*_angsd.fa.gz {params.projdir}/fasta/
+        rsync -av schmutzi/*_angsd.fa {params.projdir}/fasta/
         echo "Move Schmutzi's contamination estimates"
         mkdir -p {params.projdir}/contamination
         rsync -av schmutzi/*-npred_final.cont.{{est,pdf}} {params.projdir}/contamination/

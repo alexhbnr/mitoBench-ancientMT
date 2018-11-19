@@ -290,7 +290,7 @@ rule backup:
         rsync -av schmutzi/*-npred_final.cont.{{est,pdf}} {params.projdir}/contamination/
         echo "Move Haplogrep's haplogroup assignment"
         mkdir -p {params.projdir}/hsd
-        rsync -av schmutzi/*-wpred_final_endo.hsd {params.projdir}/hsd/
+        rsync -av schmutzi/*-npred_final_endo.hsd {params.projdir}/hsd/
         """
 
 rule clean:

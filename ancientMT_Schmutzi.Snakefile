@@ -212,7 +212,6 @@ rule haplogrep:
     input: "schmutzi/{schmutzi}-npred_final_endo.fa"
     output: "schmutzi/{schmutzi}-npred_final_endo.hsd"
     message: "Run Haplogroup 2: {wildcards.schmutzi}"
-    group: "hsd"
     shell:
         """
         java -Xmx3g -jar /mnt/genotyping/sk_pipelines/source/bin/haplogrep/haplogrep-2.1.16.jar \

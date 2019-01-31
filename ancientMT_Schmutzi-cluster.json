@@ -33,7 +33,8 @@
     "schmutzi_nopred" :
     {
         "vfree"  : "6G",
-        "hvmem"  : "6G"
+        "hvmem"  : "6G",
+        "class"  : "default"
     },
 
     "angsd_consensus" :

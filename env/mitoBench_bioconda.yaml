@@ -1,0 +1,18 @@
+name: mitoBench-ancientMT
+channels:
+  - bioconda
+dependencies:
+  - samtools = 1.9
+  - bwa = 0.7.17
+  - bioawk = 1.0
+  - circularmapper = 1.93.4
+  - dedup = 0.12.3 
+  - damageprofiler = 0.4.4
+  - python = 3.7
+  - pip:
+    - pandas==0.24
+    - numpy==1.16.2
+    - scipy==1.2.1
+    - biopython==1.73
+    - pysam==0.15.2
+    #- git+http://https://github.com/svohr/mixemt

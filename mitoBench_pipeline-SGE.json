@@ -1,0 +1,41 @@
+{
+    "__default__" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G",
+        "class"  : "*",  
+        "out"    : "cluster_logs/\\$JOB_NAME.\\$JOB_ID.o",
+        "err"    : "cluster_logs/\\$JOB_NAME.\\$JOB_ID.e"
+    },
+
+    "extract_MT_reads" :
+    {
+        "vfree"  : "2G",
+        "hvmem"  : "2G"
+    },
+
+    "bwa_aln" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "bwa_sampe" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "bwa_samse" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "bam_merge_wrap_sort" :
+    {
+        "vfree"  : "5G",
+        "hvmem"  : "5G"
+    
+    }
+}

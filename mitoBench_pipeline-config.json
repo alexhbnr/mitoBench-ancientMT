@@ -1,10 +1,8 @@
 {
-    "samplelist" : "/mnt/scratch/alexh/snpAD_test_samples/samplelist.txt", 
-    "projdir" : "/mnt/scratch/alexh/snpAD_test_samples",
-    "tmpdir" : "/mnt/scratch/alexh/snpAD_test_samples/tmp",
-    "bamdir" : "/mnt/scratch/alexh/snpAD_test_samples",
+    "samplelist" : "", 
+    "bamdir" : "",
+    "projdir" : "",
+    "tmpdir" : "",
     "bamsuffix" : "bam",
-    "scheduler" : "sge",
-    "snakedir" : "/home/alexander_huebner/github/mitoBench-ancientMT",
     "sampleIDconstraint" : "[A-Za-z0-9\\.]+"
 }

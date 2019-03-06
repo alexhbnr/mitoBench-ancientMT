@@ -37,5 +37,33 @@
         "vfree"  : "5G",
         "hvmem"  : "5G"
     
+    },
+
+    "bam_rmdup" :
+    {
+        "vfree"  : "5G",
+        "hvmem"  : "5G"
+    
+    },
+
+    "damage_profiler" :
+    {
+        "vfree"  : "8G",
+        "hvmem"  : "8G"
+    
+    },
+
+    "flagstat" :
+    {
+        "vfree"  : "2G",
+        "hvmem"  : "2G"
+    
+    },
+
+    "bam_merge_wrap_sort" :
+    {
+        "vfree"  : "5G",
+        "hvmem"  : "5G"
+    
     }
 }

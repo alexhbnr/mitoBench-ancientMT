@@ -26,6 +26,19 @@ SAMPLES = [line.rstrip() for line in open(config['samplelist'], "rt")]
 BAMS = {sample: "{}/{}.{}".format(config['bamdir'], sample, config['bamsuffix'])
         for sample in SAMPLES}
 
+# Auxilliary functions
+
+def mixemt_downsampling(flagstatfn):
+    ''' Determines the number of reads in a BAM file based on samtools flagstat
+        and calculates the fraction of reads necessary to obtain 40,000 reads,
+        the suggested input into mixEMT. The fraction will be used as input into
+        samtools view -s for subsampling with SEED 0.
+    '''
+    with open(flagstatfn, "rt") as flagstatfile:
+        nreads = int(next(flagstatfile).split(" ")[0])
+    return "{:.4f}".format(40000 / nreads)
+
+
 # Snakemake rules
 wildcard_constraints:
     sample = config['sampleIDconstraint']
@@ -35,7 +48,7 @@ localrules: link_index
 rule all:
     input: expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES),
            expand("qual/{sample}/identity_histogram.pdf", sample=SAMPLES),
-           expand("logs/flagstat/{sample}.flagstat", sample=SAMPLES)
+           expand("logs/mixemt/{sample}.mixemt.pos.tab", sample=SAMPLES)
 
 
 # Prepare sorted, duplicate removed BAM files aligned only against the MT genome
@@ -171,7 +184,8 @@ rule bam_merge_wrap_sort:
             {params.merged_bam} \
             {input.bam_12} \
             {input.bam_0} 
-        realignsamfile \
+        java -Xms512M -Xmx1G \
+            -jar ${{CONDA_DEFAULT_ENV}}/share/circularmapper-1.93.4-1/realign-1.93.4.jar \
 			-e 1000 \
 			-r {params.reffa} \
 			-f true \
@@ -193,12 +207,16 @@ rule bam_rmdup:
     version: "0.1"
     shell:
         """
-        dedup -i {input} \
-              --merged \
-              -o bam
+        java -Xms512M -Xmx1G \
+            -jar ${{CONDA_DEFAULT_ENV}}/share/dedup-0.12.3-1/DeDup-0.12.3.jar \
+            -i {input} \
+            --merged \
+            -o bam
         mv bam/{wildcards.sample}_MTonly.sorted.hist logs/dedup/{wildcards.sample}_dedup.hist
         mv bam/{wildcards.sample}_MTonly.sorted.log {log}
-        mv bam/{wildcards.sample}_MTonly.sorted_rmdup.bam {output}
+        samtools sort -o {output} bam/{wildcards.sample}_MTonly.sorted_rmdup.bam
+        samtools index {output}
+        rm bam/{wildcards.sample}_MTonly.sorted_rmdup.bam
         """
 
 # Quality checks
@@ -217,7 +235,8 @@ rule damage_profiler:
             reffa = f"{workflow.basedir}/resources/NC_012920.fa"
     shell:
         """
-        damageprofiler \
+        java -Xms512M -Xmx1G \
+            -jar ${{CONDA_DEFAULT_ENV}}/share/damageprofiler-0.4.4-1/DamageProfiler-0.4.4.jar \
             -i {input} \
             -o {params.dir} \
             -r {params.reffa}
@@ -238,36 +257,38 @@ rule flagstat:
         "samtools flagstat {input} > {output}"
 
 
-#rule mixemt:
-    #input:
-        #"bam/{sample}_MTonly.sorted.rmdup.bam"
-    #output:
-        #"logs/haplogrep2/{sample}.hsd"
-    #message: "Determine mtDNA contamination for {wildcards.sample} using mixEMT"
-    #conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    #version: "0.1"
-    #params: dir = "qual",
-            #tmpdir = "qual/{sample}_MTonly.sorted.rmdup",
-            #outdir = "qual/{sample}",
-            #reffa = f"{workflow.basedir}/resources/NC_012920.fa"
-    #shell:
-        #"""
-        #READS=$(head -1 {input} | cut -f1 -d' ')
-        #if [[ ${{READS}} -gt {config[NREADS]} ]]; then
-            #FRAC=$(perl -E "say {config[NREADS]} / ${{READS}}")
-            #{config[SAMTOOLS]} view -bh \
-                    #-s ${{FRAC}} \
-                    #-o {wildcards.id}-sub.bam {wildcards.id}.bam
-            #{config[SAMTOOLS]} index {wildcards.id}-sub.bam
-            #python2 {config[MIXEMT]} -v \
-                    #-t {wildcards.id}.mixemt \
-                    #{wildcards.id}-sub.bam > {output.log} 2> {log}
-        #else
-            #python2 {config[MIXEMT]} -v \
-                    #-t {wildcards.id}.mixemt \
-                    #{wildcards.id}.realigned.bam > {output.log} 2> {log}
-        #fi
-        #"""
+rule mixemt:
+    input:
+        bam = "bam/{sample}_MTonly.sorted.rmdup.bam",
+        flagstat = "logs/flagstat/{sample}.flagstat"
+    output:
+        "logs/mixemt/{sample}.mixemt.pos.tab"
+    message: "Determine mtDNA contamination for {wildcards.sample} using mixEMT"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params: 
+            subsampling = lambda wildcards: True if float(mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat")) < 1 else False,
+            subsampling_fraction = lambda wildcards: mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat"),
+            subbam = "bam/{sample}_MTonly.sorted.rmdup.downsampled.bam",
+            mixemtprefix = "logs/mixemt/{sample}.mixemt"
+    shell:
+        """
+        if [[ {params.subsampling} = "True" ]]; then  # subsampling
+            samtools view -bh \
+                          -s {params.subsampling_fraction} \
+                          -o {params.subbam} \
+                          {input.bam}
+        else
+            ln -s ${{PWD}}/{input.bam} {params.subbam}
+        fi
+        samtools index {params.subbam}
+        mixemt -v -t \
+                {params.mixemtprefix} \
+                {params.subbam} \
+                > {params.mixemtprefix}.log \
+                2> {params.mixemtprefix}.stderr
+        rm {params.subbam}*
+        """
 
 #rule haplogrep2:
     #input:
@@ -283,8 +304,8 @@ rule flagstat:
             #reffa = f"{workflow.basedir}/resources/NC_012920.fa"
     #shell:
         #"""
-        #damageprofiler \
-            #-i {input} \
+        #java -jar {workflow.basedir}/resources/haplogrep-2.1.19.jar \
+            #--i {input} \
             #-o {params.dir} \
             #-r {params.reffa}
         #mv {params.tmpdir} {params.outdir}

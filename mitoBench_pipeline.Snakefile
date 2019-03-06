@@ -48,7 +48,8 @@ localrules: link_index
 rule all:
     input: expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES),
            expand("qual/{sample}/identity_histogram.pdf", sample=SAMPLES),
-           expand("logs/mixemt/{sample}.mixemt.pos.tab", sample=SAMPLES)
+           expand("logs/mixemt/{sample}.mixemt.pos.tab", sample=SAMPLES),
+           "logs/seqdepth.csv"
 
 
 # Prepare sorted, duplicate removed BAM files aligned only against the MT genome
@@ -177,7 +178,7 @@ rule bam_merge_wrap_sort:
     params: merged_bam = "bam/{sample}_MT_120.bam",
             reffa = f"{workflow.basedir}/resources/NC_012920.fa",
             realigned_bam = "bam/{sample}_MT_120_realigned.bam"
-    #threads: 4
+    threads: 2
     shell:
         """
         samtools merge \
@@ -288,6 +289,24 @@ rule mixemt:
                 > {params.mixemtprefix}.log \
                 2> {params.mixemtprefix}.stderr
         rm {params.subbam}*
+        """
+
+
+rule seqdepth:
+    input:
+        expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES)
+    output:
+        "logs/seqdepth.csv"
+    message: "Run samtools depth to determine the coverage across the MT genome"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params: 
+        header = "chr\tpos\t{}\n".format("\t".join([sm for sm in SAMPLES])),
+        bams = " ".join(["bam/{}_MTonly.sorted.rmdup.bam".format(sm) for sm in SAMPLES])
+    shell:
+        """
+        echo "{params.header}" > {output}
+        samtools -a -r MT {params.bams} >> {output}
         """
 
 #rule haplogrep2:

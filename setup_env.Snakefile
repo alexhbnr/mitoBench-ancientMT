@@ -17,7 +17,7 @@ localrules: decompress_fasta, bwa_index, samtools_index
 
 
 rule all:
-    input: f"{PATH}/resources/NC_012920.fa",
+    input: f"{PATH}/resources/NC_012920.fa.fai",
            f"{PATH}/resources/NC_012920_1000.fa.fai",
            f"{PATH}/resources/NC_012920_1000.fa.ann",
            f"{PATH}/resources/NC_012920.fa_1000_elongated",
@@ -60,12 +60,23 @@ rule bwa_index:
     shell:
         "bwa index {input}"
 
-rule samtools_index:
+rule samtools_index_extended:
     input:
         "{PATH}/resources/NC_012920_1000.fa"
     output:
         "{PATH}/resources/NC_012920_1000.fa.fai"
     message: "Samtools faidx the FastA sequence of the human MT genome with 1000 bp extension"
+    conda: f"{PATH}/env/mitoBench_setup_bioconda.yaml"
+    version: "0.1"
+    shell:
+        "samtools faidx {input}"
+
+rule samtools_index:
+    input:
+        "{PATH}/resources/NC_012920.fa"
+    output:
+        "{PATH}/resources/NC_012920.fa.fai"
+    message: "Samtools faidx the FastA sequence of the human MT genome"
     conda: f"{PATH}/env/mitoBench_setup_bioconda.yaml"
     version: "0.1"
     shell:

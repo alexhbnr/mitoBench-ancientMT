@@ -34,9 +34,44 @@ def mixemt_downsampling(flagstatfn):
         the suggested input into mixEMT. The fraction will be used as input into
         samtools view -s for subsampling with SEED 0.
     '''
-    with open(flagstatfn, "rt") as flagstatfile:
-        nreads = int(next(flagstatfile).split(" ")[0])
-    return "{:.4f}".format(40000 / nreads)
+    if os.path.isfile(flagstatfn):
+        with open(flagstatfn, "rt") as flagstatfile:
+            nreads = int(next(flagstatfile).split(" ")[0])
+        return "{:.4f}".format(40000 / nreads)
+    else:
+        return 1.0
+
+
+def calcuate_trim_threshold(dirname, end):
+    ''' Infer the number of bases to trim on both the 5p and 3p end of reads to
+        avoid having issues with ancient DNA damage pattern for subsequent
+        consensus calling.
+        The threshold is determined and by calculating the mean and standard
+        deviation of the C > T and G > A substitution frequency for the last 25
+        bases as reported by DamageProfiler, respectively. As we expect a lower
+        substitution frequency towards the middle of a read, we determine the
+        first position, for which the subsitution frequency is within one
+        standard deviation of the mean, and remove all bases to the left of it
+        on the 5p end and all bases to the right on the 3p end.
+    '''
+    if os.path.isdir(dirname):
+        if end == "5p":  # 5' end
+            damageprof = pd.read_csv(dirname + "/5pCtoT_freq.txt", sep="\t",
+                                comment="#")
+        elif end == "3p":   # 3' end
+            damageprof = pd.read_csv(dirname + "/3pGtoA_freq.txt", sep="\t",
+                                comment="#")
+        damageprof.columns = ['pos', 'freq']
+
+        if damageprof['freq'].max() >= 0.02:  # only cut with C to T frequency >= 2%
+            threshold = damageprof['freq'].mean() + damageprof['freq'].std()
+            cut_position = damageprof.loc[damageprof['freq'] <= threshold]. \
+                    iloc[0].name
+        else:
+            cut_position = 0
+        return cut_position
+    else:
+        cut_position = 0
 
 
 # Snakemake rules
@@ -49,7 +84,10 @@ rule all:
     input: expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES),
            expand("qual/{sample}/identity_histogram.pdf", sample=SAMPLES),
            expand("logs/mixemt/{sample}.mixemt.pos.tab", sample=SAMPLES),
-           "logs/seqdepth.csv"
+           "logs/seqdepth.csv",
+           expand("fasta/{sample}_angsd.fa", sample=SAMPLES),
+           expand("fasta/{sample}_angsd_unclipped.fa", sample=SAMPLES),
+           expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES)
 
 
 # Prepare sorted, duplicate removed BAM files aligned only against the MT genome
@@ -181,7 +219,7 @@ rule bam_merge_wrap_sort:
     threads: 2
     shell:
         """
-        samtools merge \
+        samtools merge -c \
             {params.merged_bam} \
             {input.bam_12} \
             {input.bam_0} 
@@ -306,39 +344,97 @@ rule seqdepth:
     shell:
         """
         echo "{params.header}" > {output}
-        samtools -a -r MT {params.bams} >> {output}
+        samtools depth -a -r MT {params.bams} >> {output}
         """
 
-#rule haplogrep2:
-    #input:
-        #"bam/{sample}_MTonly.sorted.rmdup.bam"
-    #output:
-        #"logs/haplogrep2/{sample}.hsd"
-    #message: "Determine mtDNA haplogroup for {wildcards.sample} using HaploGrep2"
-    #conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    #version: "0.1"
-    #params: dir = "qual",
-            #tmpdir = "qual/{sample}_MTonly.sorted.rmdup",
-            #outdir = "qual/{sample}",
-            #reffa = f"{workflow.basedir}/resources/NC_012920.fa"
-    #shell:
-        #"""
-        #java -jar {workflow.basedir}/resources/haplogrep-2.1.19.jar \
-            #--i {input} \
-            #-o {params.dir} \
-            #-r {params.reffa}
-        #mv {params.tmpdir} {params.outdir}
-        #"""
+# Consensus calling
+
+rule trim_bam:
+    input:
+        bam = "bam/{sample}_MTonly.sorted.rmdup.bam",
+        damageprof = "qual/{sample}/identity_histogram.pdf"
+    output:
+        "bam/{sample}_MTonly.sorted.rmdup.clip.bam"
+    message: "Soft-clip ends of reads with high amounts of DNA damage: {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        p3_nbases = lambda wildcards: calcuate_trim_threshold(f"qual/{wildcards.sample}", "3p"),
+        p5_nbases = lambda wildcards: calcuate_trim_threshold(f"qual/{wildcards.sample}", "5p")
+    shell:
+        """
+        bam trimBam {input.bam} {output} -L {params.p5_nbases} -R {params.p3_nbases}
+        """
+
+rule angsd_consensus:
+    # Call consensus sequence as described by Ehler et al. (2018): amtDB 
+    input: "bam/{sample}_MTonly.sorted.rmdup.clip.bam"
+    output: "fasta/{sample}_angsd.fa"
+    message: "Call consensus sequence using ANGSD following Ehler et al. (2018): {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    threads: 2
+    params: reffasta = f"{workflow.basedir}/resources/NC_012920.fa",
+            dir = "fasta"
+    shell:
+        """
+        angsd \
+            -i {input} \
+            -minMapQ 30 \
+            -minQ 20 \
+            -doFasta 2 \
+            -doCounts 1 \
+            -ref {params.reffasta} \
+            -out {params.dir}/{wildcards.sample}_angsd.tmp
+        bioawk \
+            -c fastx '{{print ">{wildcards.sample}"; print $seq}}' \
+            {params.dir}/{wildcards.sample}_angsd.tmp.fa.gz > {output}
+        rm {params.dir}/{wildcards.sample}_angsd.tmp.*
+        """
+
+rule angsd_consensus_unclipped:
+    # Call consensus sequence as described by Ehler et al. (2018): amtDB 
+    input: "bam/{sample}_MTonly.sorted.rmdup.bam"
+    output: "fasta/{sample}_angsd_unclipped.fa"
+    message: "Call consensus sequence using ANGSD following Ehler et al. (2018) on unclipped BAM file: {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    threads: 2
+    params: reffasta = f"{workflow.basedir}/resources/NC_012920.fa",
+            dir = "fasta"
+    shell:
+        """
+        angsd \
+            -i {input} \
+            -minMapQ 30 \
+            -minQ 20 \
+            -doFasta 2 \
+            -doCounts 1 \
+            -ref {params.reffasta} \
+            -out {params.dir}/{wildcards.sample}_angsd_unclipped.tmp
+        bioawk \
+            -c fastx '{{print ">{wildcards.sample}"; print $seq}}' \
+            {params.dir}/{wildcards.sample}_angsd_unclipped.tmp.fa.gz > {output}
+        rm {params.dir}/{wildcards.sample}_angsd_unclipped.tmp.*
+        """
 
 
-#rule template:
-    #input:
-    #output:
-    #message: ""
-    #params: 
-    #shell:
-        #"""
-        #"""
+rule haplogrep2:
+    input:
+        "fasta/{sample}_angsd.fa"
+    output:
+        "logs/haplogrep2/{sample}.hsd"
+    message: "Determine mtDNA haplogroup for {wildcards.sample} using HaploGrep2"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    shell:
+        """
+        java -jar {workflow.basedir}/resources/haplogrep-2.1.19.jar \
+            --in {input} \
+            --extend-report \
+            --format fasta \
+            --out {output}
+        """
 
 #### Rules
 # Starting point BAM file aligned against hg19 plus decoy

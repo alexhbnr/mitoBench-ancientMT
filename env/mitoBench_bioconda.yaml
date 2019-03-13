@@ -8,6 +8,8 @@ dependencies:
   - circularmapper = 1.93.4
   - dedup = 0.12.3 
   - damageprofiler = 0.4.4
+  - bamutil = 1.0.14
+  - angsd = 0.923
   - python = 2.7.15
   - pip:
     - git+https://github.com/benjaminp/six

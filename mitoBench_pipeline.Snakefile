@@ -37,7 +37,7 @@ def mixemt_downsampling(flagstatfn):
     if os.path.isfile(flagstatfn):
         with open(flagstatfn, "rt") as flagstatfile:
             nreads = int(next(flagstatfile).split(" ")[0])
-        return "{:.4f}".format(40000 / nreads)
+        return "{:.4f}".format(30000 / nreads)
     else:
         return 1.0
 

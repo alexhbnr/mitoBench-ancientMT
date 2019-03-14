@@ -21,7 +21,8 @@ rule all:
            f"{PATH}/resources/NC_012920_1000.fa.fai",
            f"{PATH}/resources/NC_012920_1000.fa.ann",
            f"{PATH}/resources/NC_012920.fa_1000_elongated",
-           f"{PATH}/resources/haplogrep-2.1.19.jar"
+           f"{PATH}/resources/haplogrep-2.1.19.jar",
+           f"{PATH}/resources/contamMix/exec/estimate.R"
 
 # Prepare MT genome for analysis
 
@@ -100,3 +101,12 @@ rule download_haplogrep:
     params: url = "https://github.com/seppinho/haplogrep-cmd/releases/download/v2.1.19/haplogrep-2.1.19.jar"
     shell:
         "wget -O {output} {params.url}"
+
+rule uncompress_contamMix:
+    output:
+        "{PATH}/resources/contamMix/exec/estimate.R"
+    message: "Uncompress the tar ball of contamMix"
+    params:
+        tarball = f"{workflow.basedir}/resources/contamMix_1.0-10.tar.gz" 
+    shell:
+        "tar xvf {params.tarball}"

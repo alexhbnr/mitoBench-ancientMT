@@ -10,6 +10,8 @@ dependencies:
   - damageprofiler = 0.4.4
   - bamutil = 1.0.14
   - angsd = 0.923
+  - mafft
+  - r = 3.5.1
   - python = 2.7.15
   - pip:
     - git+https://github.com/benjaminp/six

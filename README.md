@@ -37,8 +37,7 @@ This will
 
   - download the commandline version of [HaploGrep](http://haplogrep.uibk.ac.at/)
     for determining the mtDNA haplogroups
-  - download the Python package [mixemt](https://github.com/svohr/mixemt) for
-    estimating the mtDNA contamination based on read mixtures
+  - unpack the tarball of the R package contamMix
   - prepare the revised Cambridge reference sequence (rCRS) as a reference
     genome for the subsequent analyses of the pipeline
 
@@ -126,3 +125,75 @@ snakemake -s mitoBench_pipeline.Snakefile \
 ```
 
 ## Overview of the pipeline
+
+This pipeline is built to process per-sample BAM files and return a mtDNA
+consensus sequence and some additional quality statistics, e.g. coverage across
+the mitochondrial genome, DNA damage profile, mtDNA haplogroup etc. The pipeline
+assumes that raw sequencing data has been de-multiplexed, adapters have been
+removed and overlapping reads have been merged. Additionally, it expects an
+alignment against the human reference genome (hg19) and that the output is
+sorted BAM file.
+
+The steps of the pipeline are:
+
+  1. Create a softlink of each BAM file specified in the `samplelist` into the
+     temporary directory and create an index using `samtools index`.
+  2. Extract all reads aligned to the mitochondrial genome (assuming that the
+     chromosome name is "MT") regardless of the mapping quality.
+  3. Align the extracted reads only against the rCRS reference genome, which is
+     extended by pasting the first 1,000 base pairs to the end of the sequence
+     to account for the circular nature of the DNA molecule, using `bwa aln`.
+     Generate alignment files using `bwa sampe` & `bwa samse`.
+  4. Join the separate output files for merged and non-merged paired-end reads
+     using `samtools merge`, adjust the alignment coordinates to the original
+     length of rCRS (16,569 bp) using circularmapper's `realign` and sort the
+     output.
+  5. Remove duplicate sequences using `DeDup` and sort DeDup's output file
+     again.
+  6. Analyse the read length distribution and the DNA damage profile using
+     `DamageProfiler`.
+  7. Count the number of reads available per sample using `samtools flagstat`
+     and calculate the fraction of reads that correspond to 30,000 reads for
+     later down-sampling using `samtools view` using seed 0.
+  8. Infer the per-base sequencing depth of all samples using `samtools depth`.
+  9. Calculate the number of bases to trim from both the 5' and 3' end of a read
+     by calculating the mean frequency of C to T substitutions at the 5' end and
+     of G to A substitutions on the 3' end, respectively, as well as the
+     standard deviation. All bases are trimmed that are above the threshold of
+     the mean frequency plus one standard deviation regarding their
+     substitutions, in case the threshold is >= 2%, otherwise no bases are
+     trimmed. Trim the bases using `bamUtil trimBam`.
+  10. Call the consensus sequences using `ANGSD` requiring a minimal base
+      quality of 30 and minimal mapping quality of 20 based on both the clipped
+      and non-clipped sequencing data.
+  11. Infer the haplogroup using `HaploGrep2` using the consensus sequence
+      called from the clipped sequencing data.
+  12. Infer the haplogroups and their proportion of contribution to the pool of
+      sequences using `mixEMT`.
+  13. Calculate the proportions of authentic, non-contaminant DNA using
+      `contamMix`.
+
+When all these steps are run, the results are summarised in a table called
+`summary_table.csv`. This table contains the following information:
+
+  - the number of unique reads that aligned to the rCRS
+  - the mean and the standard deviation of the coverage across the genome and
+    the number of sites with at least 5-fold coverage
+  - the mode of the read length distribution
+  - the number of trimmed bases separately calculated for the 5' and the 3' end
+  - the percentage of missing information (Ns) in the consensus sequences called
+    from the clipped sequencing data
+  - the number of differences between the consensus sequences called from the
+    clipped and non-clipped sequencing data
+  - the inferred haplogroup, the quality of the haplogroup assignment and the
+    number of non-found and remaining polymorphisms, respectively
+  - the proportion of authentic, non-contaminant DNA
+  - the haplogroups and their proportions of contribution to the sequencing pool
+
+Further, the consensus sequences based on the clipped sequencing data will be
+copied to the directory `fasta` in the specified project folder and the raw
+information that were summarised in the summary table are copied into a
+per-sample folder in the directory `sample_stats`.
+
+The temporary folder can later be removed by running the Snakemake pipeline with
+the specified rule `clean_tmp`.

@@ -124,6 +124,10 @@ snakemake -s mitoBench_pipeline.Snakefile \
           --cores 20
 ```
 
+In all three examples, replace the config file `mitoBench_pipeline-config.json`
+with the version of the config file in which you specified the paths to the
+sample list, the temporary directory, the project directory etc.
+
 ## Overview of the pipeline
 
 This pipeline is built to process per-sample BAM files and return a mtDNA

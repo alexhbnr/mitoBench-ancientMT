@@ -36,34 +36,80 @@
     {
         "vfree"  : "5G",
         "hvmem"  : "5G"
-    
     },
 
     "bam_rmdup" :
     {
         "vfree"  : "5G",
         "hvmem"  : "5G"
-    
     },
 
     "damage_profiler" :
     {
         "vfree"  : "8G",
         "hvmem"  : "8G"
-    
     },
 
     "flagstat" :
     {
         "vfree"  : "2G",
         "hvmem"  : "2G"
-    
     },
 
-    "bam_merge_wrap_sort" :
+    "mixemt" :
     {
-        "vfree"  : "5G",
-        "hvmem"  : "5G"
-    
+        "vfree"  : "12G",
+        "hvmem"  : "12G"
+        "class"  : "default"
+    },
+
+    "seqdepth" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G"
+    },
+
+    "trim_bam" :
+    {
+        "vfree"  : "3G",
+        "hvmem"  : "3G"
+    },
+
+    "angsd_consensus" :
+    {
+        "vfree"  : "3G",
+        "hvmem"  : "3G"
+    },
+
+
+    "angsd_consensus_unclipped" :
+    {
+        "vfree"  : "3G",
+        "hvmem"  : "3G"
+    },
+
+    "haplogrep2" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G"
+    },
+
+    "contamMix_create_sequencePanel" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "contamMix_align_against_consensus" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G"
+    },
+
+    "contamMix_estimate" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
     }
+
 }

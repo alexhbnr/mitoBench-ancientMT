@@ -5,6 +5,7 @@
 ################################################################################
 
 from snakemake.utils import min_version
+from snakemake.utils import R
 
 from glob import glob
 import os
@@ -25,6 +26,9 @@ if not os.path.isdir(f"{config['tmpdir']}/cluster_logs"):
 SAMPLES = [line.rstrip() for line in open(config['samplelist'], "rt")]
 BAMS = {sample: "{}/{}.{}".format(config['bamdir'], sample, config['bamsuffix'])
         for sample in SAMPLES}
+
+# Extract project directory
+PROJDIR = config['projdir']
 
 # Auxilliary functions
 
@@ -78,17 +82,11 @@ def calcuate_trim_threshold(dirname, end):
 wildcard_constraints:
     sample = config['sampleIDconstraint']
 
-localrules: link_index
+localrules: link_index, summary, copy_tmp_to_proj
 
 rule all:
-    input: expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES),
-           expand("qual/{sample}/identity_histogram.pdf", sample=SAMPLES),
-           expand("logs/mixemt/{sample}.mixemt.pos.tab", sample=SAMPLES),
-           "logs/seqdepth.csv",
-           expand("fasta/{sample}_angsd.fa", sample=SAMPLES),
-           expand("fasta/{sample}_angsd_unclipped.fa", sample=SAMPLES),
-           expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES)
-
+    input: expand("{projdir}/summary_table.csv", projdir=[PROJDIR]),
+           expand("{projdir}/fasta/{sample}.fa", projdir=[PROJDIR], sample=SAMPLES)
 
 # Prepare sorted, duplicate removed BAM files aligned only against the MT genome
 
@@ -225,13 +223,13 @@ rule bam_merge_wrap_sort:
             {input.bam_0} 
         java -Xms512M -Xmx1G \
             -jar ${{CONDA_DEFAULT_ENV}}/share/circularmapper-1.93.4-1/realign-1.93.4.jar \
-			-e 1000 \
-			-r {params.reffa} \
-			-f true \
-			-x false \
-			-i {params.merged_bam}
+            -e 1000 \
+            -r {params.reffa} \
+            -f true \
+            -x false \
+            -i {params.merged_bam}
         samtools sort -o {output} {params.realigned_bam}
-		rm {params.merged_bam} {params.realigned_bam}
+        rm {params.merged_bam} {params.realigned_bam}
         """
 
 
@@ -339,7 +337,7 @@ rule seqdepth:
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.1"
     params: 
-        header = "chr\tpos\t{}\n".format("\t".join([sm for sm in SAMPLES])),
+        header = "chr\tpos\t{}".format("\t".join([sm for sm in SAMPLES])),
         bams = " ".join(["bam/{}_MTonly.sorted.rmdup.bam".format(sm) for sm in SAMPLES])
     shell:
         """
@@ -436,19 +434,361 @@ rule haplogrep2:
             --out {output}
         """
 
-#### Rules
-# Starting point BAM file aligned against hg19 plus decoy
-# 3. Quality filter
-#   * coverage
-#   * average read length (maybe in DamageProfiler)
-#   * contamination estimates
-#        * mixEMT
-#        * contamMix
-#   * damage profile using DamageProfiler
-#   * haplogroup using HaploGrep2
-# 4. Determine whether UDG treated?
-# 5. Calculate trim cut-off based on damage profile
-# 6. Trim the ends of BAM file
-# 7. Consensus calling using ANGSD
-# 8. Consensus calling using snpAD without trimming
-# 9. Summary statistics
+# Contamination estimate using contamMix
+
+rule contamMix_create_sequencePanel:
+    input:
+        "fasta/{sample}_angsd.fa"
+    output:
+        "logs/contamMix/{sample}/sequence_panel.fasta"
+    message: "Align consensus sequence of {wildcards.sample} to panel of 311 modern humans"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params: 
+        panel = f"{workflow.basedir}/resources/311hu+rCRS.fas"
+    shell:
+        """
+        cat {input} {params.panel} | \
+        mafft - > {output}
+        """
+
+rule contamMix_align_against_consensus:
+    input:
+        flagstat = "logs/flagstat/{sample}.flagstat",
+        fas = "fasta/{sample}_angsd.fa",
+        bam = "bam/{sample}_MTonly.sorted.rmdup.bam"
+    output:
+        "logs/contamMix/{sample}/{sample}.consensus_aligned.bam"
+    message: "Align sequences of {wildcards.sample} against its consensus sequence"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params: 
+        readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample),
+        subsampling = lambda wildcards: True if float(mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat")) < 1 else False,
+        subsampling_fraction = lambda wildcards: mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat"),
+        subbam = "logs/contamMix/{sample}/{sample}.subsampled.bam"
+    threads: 4
+    shell:
+        """
+        # Create FastA of consensus sequence with overhang and index with BWA
+        bioawk -c fastx '{{
+            print ">" $name; \
+            print $seq substr($seq,1,1000); 
+        }}' {input.fas} > logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta
+        bwa index logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta
+        # Sub-sample BAM file to 30 000 reads
+        if [[ {params.subsampling} = "True" ]]; then  # subsampling
+            samtools view -bh \
+                          -s {params.subsampling_fraction} \
+                          -o {params.subbam} \
+                          {input.bam}
+        else
+            ln -s ${{PWD}}/{input.bam} {params.subbam}
+        fi
+        # BWA aln against sample's consensus sequence
+        bwa aln \
+            -t {threads} \
+            -n 0.01 -o 2 -l 16500 \
+            -b -1 \
+            -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.1.sai \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+            {params.subbam}
+        bwa aln \
+            -t {threads} \
+            -n 0.01 -o 2 -l 16500 \
+            -b -2 \
+            -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.2.sai \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+            {params.subbam}
+        bwa aln \
+            -t {threads} \
+            -n 0.01 -o 2 -l 16500 \
+            -b -0 \
+            -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.0.sai \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+            {params.subbam}
+        # BWA sampe and samse to create alignment files
+        bwa sampe \
+            -r '{params.readgroup}' \
+            -f /dev/stdout \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}.1.sai \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}.2.sai \
+            {params.subbam} \
+            {params.subbam} | \
+        samtools view -hb - > logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_12.bam
+        bwa samse \
+            -r '{params.readgroup}' \
+            -f /dev/stdout \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}.0.sai \
+            {params.subbam} | \
+        samtools view -hb - > logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_0.bam
+        # Merge sam files, re-wrap and sort
+        samtools merge -c \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_12.bam \
+            logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_0.bam 
+        echo "{wildcards.sample}" > logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta_1000_elongated
+        java -Xms512M -Xmx1G \
+            -jar ${{CONDA_DEFAULT_ENV}}/share/circularmapper-1.93.4-1/realign-1.93.4.jar \
+            -e 1000 \
+            -r logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+            -f true \
+            -x false \
+            -i logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam
+        samtools sort -o {output} logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120_realigned.bam
+        # Clean
+        rm logs/contamMix/{wildcards.sample}/{wildcards.sample}.*.sai \
+           logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT* \
+           logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta* \
+           {params.subbam}
+        """
+
+rule contamMix_estimate:
+    input:
+        aln = "logs/contamMix/{sample}/sequence_panel.fasta",
+        bam = "logs/contamMix/{sample}/{sample}.consensus_aligned.bam"
+    output:
+        "logs/contamMix/{sample}/contamMix_log.txt"
+    message: "Use contamMix to estimate contamination of sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params: 
+        tarball = f"{workflow.basedir}/resources/contamMix_1.0-10.tar.gz",
+        contamMix_exec = f"{workflow.basedir}/resources/contamMix/exec/estimate.R"
+    threads: 3
+    shell:
+        """
+        R -e 'if (!("contamMix" %in% installed.packages())) {{ \
+                install.packages(c("coda", "getopt"), , repos="http://cran.us.r-project.org"); \
+                install.packages("{params.tarball}", type="source")}}'
+        {params.contamMix_exec} \
+                --samFn {input.bam} \
+                --malnFn {input.aln} \
+                --tabOutput TRUE > {output}
+        """
+
+rule summary:
+    input: expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES),
+           expand("qual/{sample}/identity_histogram.pdf", sample=SAMPLES),
+           expand("logs/mixemt/{sample}.mixemt.pos.tab", sample=SAMPLES),
+           expand("logs/contamMix/{sample}/contamMix_log.txt", sample=SAMPLES),
+           "logs/seqdepth.csv",
+           expand("fasta/{sample}_angsd.fa", sample=SAMPLES),
+           expand("fasta/{sample}_angsd_unclipped.fa", sample=SAMPLES),
+           expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES)
+    output: "{projdir}/summary_table.csv"
+    message: "Summarise the results in a table"
+    version: "0.1"
+    run:
+        R("""
+          # Install packages if not available
+          packages <- c("ape", "data.table", "tidyverse")
+          missing_packages <- packages[!(packages %in% installed.packages())]
+          if (length(missing_packages) > 0) {{
+              install.packages(missing_packages,
+                               repos = "http://cran.us.r-project.org")
+          }}
+          
+          # Load libaries
+          library(ape)
+          library(data.table)
+          library(tidyverse)
+          
+          # Start summary
+          ## number of reads
+          flagstat_fns <- list.files("logs/flagstat",
+                                     pattern = "\\\.flagstat",
+                                     full.names = T)
+          nreads_MT <- map_df(flagstat_fns, function(fn) {{
+                              tibble(sample = str_replace(basename(fn), "\\\.flagstat", ""),
+                                     nReads = as.numeric(unlist(str_split(readLines(fn)[1], " "))[1]))
+                              }})
+          ## coverage
+          seqdepth <- fread("logs/seqdepth.csv") %>%
+                      gather("sample", "cov", 3:ncol(.)) %>%
+                      group_by(sample) %>%
+                      summarise(meanCov = mean(cov),
+                                medianCov = median(cov),
+                                sdCov = sd(cov),
+                                cov_gt_5x = sum(cov >= 5))
+          
+          ## read length
+          mode_of_readlength <- function(rl) {{
+              rl %>%
+              filter(n == max(n)) %>%
+              pull(Length)
+          }}
+          readlength <- map_df(seqdepth$sample, function(s) {{
+                               readlength_dist <- fread(paste("qual", s, "lgdistribution.txt", sep="/")) %>%
+                                                  group_by(Length) %>%
+                                                  summarise(n = sum(Occurrences)) %>%
+                                                  mutate(sumRL = Length * n)
+                               tibble(sample = s,
+                                      meanReadLength = sum(readlength_dist$sumRL) / sum(readlength_dist$n),
+                                      modeReadLength = mode_of_readlength(readlength_dist))
+                               }})
+          
+          ## contamination
+          ### mixEMT
+          mixemt_fns <- list.files("logs/mixemt",
+                                   pattern = "\\\.mixemt\\\.log", full.names = T)
+          mixemt <- map_df(mixemt_fns, function(fn) {{
+                           fread(fn, header = F,
+                                 col.names = c("comp", "hg", "contr", "noReads")) %>%
+                           mutate(sample = str_replace(basename(fn), "\\\.mixemt\\\.log", ""),
+                                  contr = paste0(contr * 100, "%"),
+                                  label = paste0(hg, " (", contr, ",", noReads, ")")) %>%
+                           group_by(sample) %>%
+                           summarise(mixEMT = str_replace(toString(label), ", ", ";"))
+                           }})
+          ### contamMix
+          contamMix <- map_df(seqdepth$sample, function(s) {{
+                              fread(paste("logs/contamMix", s, "contamMix_log.txt", sep="/"),
+                                    select = 1:4,
+                                    col.names = c("error", "propAuth",
+                                                  "propAuth_lowerQuantile",
+                                                  "propAuth_upperQuantile")) %>%
+                              mutate(sample = s,
+                                     label = paste0(round(propAuth * 100, 2), "% (",
+                                                    round(propAuth_lowerQuantile * 100, 2), "-",
+                                                    round(propAuth_upperQuantile * 100, 2), "%)")) %>%
+                              select(sample, proportionAuthentic = label)
+                              }})
+          
+          ## Number of trimmed bases
+          ### 5' end
+          fiveP_CtoT <- map_df(seqdepth$sample, function(s) {{
+                          damage <- fread(paste("qual", s, "5pCtoT_freq.txt", sep="/")) 
+                          threshold <- mean(damage$`5pC>T`) + sd(damage$`5pC>T`)
+                          cut_position <- filter(damage, `5pC>T` <= threshold) %>%
+                                          slice(1) %>%
+                                          pull(pos) - 1
+                          tibble(sample = s,
+                                 `5'_trBases` = ifelse(max(damage$`5pC>T`) >= 0.02,
+                                                       cut_position, 0))
+                        }})
+          ### 3' end
+          threeP_GtoA <- map_df(seqdepth$sample, function(s) {{
+                          damage <- fread(paste("qual", s, "3pGtoA_freq.txt", sep="/")) 
+                          threshold <- mean(damage$`3pG>A`) + sd(damage$`3pG>A`)
+                          cut_position <- filter(damage, `3pG>A` <= threshold) %>%
+                                          slice(1) %>%
+                                          pull(pos) - 1
+                          tibble(sample = s,
+                                 `3'_trBases` = ifelse(max(damage$`3pG>A`) >= 0.02,
+                                                       cut_position, 0))
+                        }})
+          
+          ## Consensus sequence comparison
+          ### Clipped BAM files
+          fas_clipped_fns <- list.files("fasta",
+                                        pattern = "_angsd\\\.fa", full.names = T)
+          fas_clipped <- lapply(fas_clipped_fns, function(fn) read.dna(fn, "fasta", as.character = T))
+          
+          ### Non-clipped BAM files
+          fas_nonclipped_fns <- list.files("fasta",
+                                        pattern = "_angsd_unclipped\\\.fa", full.names = T)
+          fas_nonclipped <- lapply(fas_nonclipped_fns, function(fn) read.dna(fn, "fasta", as.character = T))
+          ### Compare consensus sequences
+          consensus_comparison <- map_df(seq(1, length(fas_clipped)), function(i) {{
+                                          tibble(sample = str_replace(basename(fas_clipped_fns[i]),
+                                                                      "_angsd\\\.fa", ""),
+                                                 noNs = sum(fas_clipped[[i]] == "n"),
+                                                 percentNs = round(noNs * 100 / 16569, 1),
+                                                 noDiffs = sum(fas_clipped[[i]] != fas_nonclipped[[i]]))
+                                        }})
+          
+          ## Haplogroup assignment
+          hsd_fns <- list.files("logs/haplogrep2",
+                                pattern = "\\\.hsd", full.names = T)
+          haplogrep <- map_df(hsd_fns, function(fn) {{
+                              fread(fn) %>%
+                              mutate(noNotFoundPolys = ifelse(is.na(Not_Found_Polys), "-",
+                                                              as.character(str_count(Not_Found_Polys, " ") + 1)),
+                                     noRemainingPolys = ifelse(is.na(Remaining_Polys), "-",
+                                                              as.character(str_count(Remaining_Polys, " ") + 1))) %>%
+                              select(sample = SampleID,
+                                     haplogroup = Haplogroup,
+                                     hgQ = Quality,
+                                     noNotFoundPolys, noRemainingPolys)
+                              }})
+          
+          # Merge summary 
+          summary_table <- nreads_MT %>%
+                           rename(`number of reads` = nReads) %>%
+                           left_join(seqdepth, by = "sample") %>%
+                           select(-medianCov) %>%
+                           mutate(meanCov = round(meanCov, 1),
+                                  sdCov = round(sdCov, 0)) %>%
+                           rename(`mean coverage` = meanCov,
+                                  `std coverage` = sdCov,
+                                  `sites >= 5-fold coverage` = cov_gt_5x) %>%
+                           left_join(readlength, by = "sample") %>%
+                           select(-meanReadLength) %>%
+                           rename(`mode of read length` = modeReadLength) %>%
+                           left_join(fiveP_CtoT, by = "sample") %>%
+                           rename(`no. of trimmed bases at 5'-end` = `5'_trBases`) %>%
+                           left_join(threeP_GtoA, by = "sample") %>%
+                           rename(`no. of trimmed bases at 3'-end` = `3'_trBases`) %>%
+                           left_join(consensus_comparison, by = "sample") %>%
+                           select(-noNs) %>%
+                           rename(`% of Ns in consensus sequence` = percentNs,
+                                  `no. of differences clipped vs. non-clipped` = noDiffs) %>%
+                           left_join(haplogrep, by = "sample") %>%
+                           rename(`haplogroup clipped reads` = haplogroup,
+                                  `haplogroup quality` = hgQ,
+                                  `no. of not-found polys` = noNotFoundPolys,
+                                  `no. of remaining polys` = noRemainingPolys) %>%
+                           left_join(contamMix, by = "sample") %>%
+                           rename(`proportion of authentic DNA (contamMix)` = proportionAuthentic) %>%
+                           left_join(mixemt, by = "sample") %>%
+                           rename(`haplogroup contributions (mixEMT)` = mixEMT)   
+          fwrite(summary_table,
+                 sep = "\t",
+                 file = "{output}")
+        """)
+
+rule copy_tmp_to_proj:
+    output: expand("{projdir}/fasta/{sample}.fa", projdir=[PROJDIR], sample=SAMPLES)
+    message: "Copy results from tmp to project folder"
+    version: "0.1"
+    shell:
+        """
+        mkdir -p {PROJDIR}/sample_stats
+        for sm in {SAMPLES}; do
+            echo ${{sm}}
+            # Create per-sample folder
+            mkdir -p {PROJDIR}/sample_stats/${{sm}}
+            # Copy non-clipped BAM file
+            cp -r bam/${{sm}}_MTonly.sorted.rmdup.bam* {PROJDIR}/sample_stats/${{sm}}/
+            # DeDup logs
+            cp -r logs/dedup/${{sm}}_dedup.* {PROJDIR}/sample_stats/${{sm}}/
+            # HaploGrep
+            cp logs/haplogrep2/${{sm}}.hsd {PROJDIR}/sample_stats/${{sm}}/
+            # MixEMT
+            cp logs/mixemt/${{sm}}.* {PROJDIR}/sample_stats/${{sm}}/
+            # DamageProfiler
+            cp qual/${{sm}}/3pGtoA_freq.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_3pGtoA_freq.txt
+            cp qual/${{sm}}/5pCtoT_freq.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_5pCtoT_freq.txt
+            cp qual/${{sm}}/DamagePlot.pdf {PROJDIR}/sample_stats/${{sm}}/${{sm}}_DamagePlot.pdf
+            cp qual/${{sm}}/Length_plot.pdf {PROJDIR}/sample_stats/${{sm}}/${{sm}}_Length_plot.pdf
+            cp qual/${{sm}}/lgdistribution.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_lgdistribution.txt
+            cp qual/${{sm}}/misincorporation.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_misincorporation.txt
+            # Unclipped FastA
+            cp fasta/${{sm}}_angsd_unclipped.fa {PROJDIR}/sample_stats/${{sm}}/${{sm}}_unclipped_consensus.fa
+            # Clipped FastA
+            cp fasta/${{sm}}_angsd.fa {PROJDIR}/fasta/${{sm}}.fa
+        done
+        cp logs/seqdepth.csv {PROJDIR}/sample_stats/
+        """
+
+# Clean temporary output
+
+rule clean_tmp:
+    params:
+        tmpdir = config['tmpdir']
+    shell:
+        "rm -r {params.tmpdir}"
+

@@ -3,7 +3,7 @@
     {
         "vfree"  : "6G",
         "hvmem"  : "6G",
-        "class"  : "*",  
+        "class"  : "*",
         "out"    : "cluster_logs/\\$JOB_NAME.\\$JOB_ID.o",
         "err"    : "cluster_logs/\\$JOB_NAME.\\$JOB_ID.e"
     },
@@ -59,7 +59,7 @@
     "mixemt" :
     {
         "vfree"  : "12G",
-        "hvmem"  : "12G"
+        "hvmem"  : "12G",
         "class"  : "default"
     },
 

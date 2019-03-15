@@ -1,0 +1,8 @@
+{
+    "samplelist" : "", 
+    "bamdir" : "",
+    "projdir" : "",
+    "tmpdir" : "",
+    "bamsuffix" : "bam",
+    "sampleIDconstraint" : "[A-Za-z0-9\\.]+"
+}

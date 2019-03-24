@@ -93,7 +93,7 @@ In order to run the pipeline using **SGE** as the scheduling system run:
 snakemake -s mitoBench_pipeline.Snakefile \
           --configfile mitoBench_pipeline-config.json \
           --cluster-config mitoBench_pipeline-SGE.json \
-          --cluster 'qsub -pe smp {threads} -l virtual_free={cluster.vfree},h_vmem={cluster.hvmem},class={cluster.class}' \
+          --cluster 'qsub -pe smp {threads} -l virtual_free={cluster.vfree},h_vmem={cluster.hvmem},class={cluster.class} -o {cluster.out} -e {cluster.err}' \
           --use-conda \
           --local-cores 8 \
           --cores 100
@@ -108,7 +108,7 @@ Using **SLURM** as the scheduling system:
 snakemake -s mitoBench_pipeline.Snakefile \
           --configfile mitoBench_pipeline-config.json \
           --cluster-config mitoBench_pipeline-SLURM.json \
-          --cluster 'sbatch --mem {cluster.mem} -p {cluster.partition} -t {cluster.time}' -o {cluster.out} -e {cluster.err} -n {threads}' \
+          --cluster 'sbatch --mem {cluster.mem} -p {cluster.partition} -t {cluster.time} -o {cluster.out} -e {cluster.err} -n {threads}' \
           --use-conda \
           --local-cores 8 \
           --cores 20

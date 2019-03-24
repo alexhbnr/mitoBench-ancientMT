@@ -82,7 +82,7 @@ def calcuate_trim_threshold(dirname, end):
 wildcard_constraints:
     sample = config['sampleIDconstraint']
 
-localrules: link_index, summary, copy_tmp_to_proj
+localrules: link_index, seqdepth, summary, copy_tmp_to_proj
 
 rule all:
     input: expand("{projdir}/summary_table.csv", projdir=[PROJDIR]),
@@ -310,6 +310,9 @@ rule mixemt:
             mixemtprefix = "logs/mixemt/{sample}.mixemt"
     shell:
         """
+        if [[ -f {params.subbam} ]]; then
+            rm {params.subbam}
+        fi
         if [[ {params.subsampling} = "True" ]]; then  # subsampling
             samtools view -bh \
                           -s {params.subsampling_fraction} \
@@ -319,11 +322,15 @@ rule mixemt:
             ln -s ${{PWD}}/{input.bam} {params.subbam}
         fi
         samtools index {params.subbam}
-        mixemt -v -t \
+        python ${{CONDA_DEFAULT_ENV}}/bin/mixemt -v -t \
                 {params.mixemtprefix} \
                 {params.subbam} \
                 > {params.mixemtprefix}.log \
-                2> {params.mixemtprefix}.stderr
+                2> {params.mixemtprefix}.stderr || \
+        if [[ ($(wc -l < {params.mixemtprefix}.log) = "0") && ($(tail -1 {params.mixemtprefix}.stderr) = "0 contributors passed filtering steps.") ]]; then
+            echo -e "hap1\tNA\tNA\t0" > {params.mixemtprefix}.log
+            touch {params.mixemtprefix}.pos.tab
+        fi
         rm {params.subbam}*
         """
 
@@ -560,6 +567,9 @@ rule contamMix_estimate:
     threads: 3
     shell:
         """
+        if [[ ! -f ${{CONDA_DEFAULT_ENV}}/lib/R/etc/ldpaths ]]; then
+            cp /etc/R/ldpaths ${{CONDA_DEFAULT_ENV}}/lib/R/etc/ldpaths
+        fi
         R -e 'if (!("contamMix" %in% installed.packages())) {{ \
                 install.packages(c("coda", "getopt"), , repos="http://cran.us.r-project.org"); \
                 install.packages("{params.tarball}", type="source")}}'

@@ -71,13 +71,6 @@
         "time"      : "1-00:00"
     },
 
-    "seqdepth" :
-    {
-        "mem"       : "6K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
     "trim_bam" :
     {
         "mem"       : "3K",

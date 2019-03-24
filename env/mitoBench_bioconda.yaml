@@ -13,6 +13,7 @@ dependencies:
   - mafft
   - r = 3.5.1
   - python = 2.7.15
+  - perl = 5.26.21
   - pip:
     - git+https://github.com/benjaminp/six
     - pandas==0.24

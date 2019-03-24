@@ -126,5 +126,33 @@
         "mem"       : "4K",
         "partition" : "medium",
         "time"      : "1-00:00"
+    },
+
+    "bam2snpAD" :
+    {
+        "mem"       : "4K",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "snpAD_estimation" :
+    {
+        "mem"       : "4K",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "snpAD_call" :
+    {
+        "mem"       : "4K",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "snpAD_vcf2fa" :
+    {
+        "mem"       : "2K",
+        "partition" : "short",
+        "time"      : "0-02:00"
     }
 }

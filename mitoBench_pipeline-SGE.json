@@ -110,6 +110,30 @@
     {
         "vfree"  : "4G",
         "hvmem"  : "4G"
+    },
+
+    "bam2snpAD" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "snpAD_estimation" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "snpAD_call" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "snpAD_vcf2fa" :
+    {
+        "vfree"  : "2G",
+        "hvmem"  : "2G"
     }
 
 }

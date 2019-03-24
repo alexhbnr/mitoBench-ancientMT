@@ -569,6 +569,88 @@ rule contamMix_estimate:
                 --tabOutput TRUE > {output}
         """
 
+# Genotype calling mit snpAD
+
+rule snpAD:
+    #input: expand("snpAD/{sample}.fasta", sample=SAMPLES)
+    input: expand("snpAD/{sample}.snpAD.vcf", sample=SAMPLES)
+
+rule bam2snpAD:
+    input: 
+        "bam/{sample}_MTonly.sorted.rmdup.bam"
+    output:
+        temp("snpAD/{sample}.snpad_input")
+    message: "Convert BAM file into snpAD input format for sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        bam2snpAD = f"{workflow.basedir}/resources/snpAD-0.3.3/Bam2snpAD",
+        reffasta = f"{workflow.basedir}/resources/NC_012920.fa"   
+    shell:
+        """
+        {params.bam2snpAD} \
+                -r MT \
+                -f {params.reffasta} \
+                {input} > {output}
+        """
+
+rule snpAD_estimation:
+    input:
+        "snpAD/{sample}.snpad_input"
+    output:
+        priors = temp("snpAD/{sample}.priors.txt"),
+        errors = temp("snpAD/{sample}.errors.txt")
+    message: "Estimate the genotype likelihoods using snpAD for sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        snpAD = f"{workflow.basedir}/resources/snpAD-0.3.3/snpAD",
+    log: "snpAD/{sample}.snpAD.log"
+    shell:
+        """
+        {params.snpAD} \
+                -o {output.priors} \
+                -O {output.errors} \
+                {input} > {log} 2>&1
+        """
+
+rule snpAD_call:
+    input:
+        snpAD = "snpAD/{sample}.snpad_input"
+        priors = temp("snpAD/{sample}.priors.txt"),
+        errors = temp("snpAD/{sample}.errors.txt")
+    output:
+        "snpAD/{sample}.snpAD.vcf"
+    message: "Call the genotypes using snpAD for sample {wildcards.sample} fixing the likelihood of a heterozygous genotype to a very small number"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        snpADcall = f"{workflow.basedir}/resources/snpAD-0.3.3/snpADCall",
+    shell:
+        """
+        {params.snpADcall} \
+                -e <(bioawk -t '$4 < 1e6{print $1, $2, $3, $4}' {input.errors}) \
+                -p $(cat {input.priors} |perl -F',' -lane 'for ($i=0 ; $i<4 ; $i++) { $F[$i]=$F[$i]/($F[0]+$F[1]+$F[2]+$F[3]); } for ($i=4; $i<@F; $i++) { $F[$i] = "1e-320" ; } print join ",",@F;') \
+                {input.snpAD} > {output}
+        """
+
+rule snpAD_vcf2fa:
+    input:
+        "snpAD/{sample}.snpAD.vcf"
+    output:
+        "snpAD/{sample}.snpAD.fa"
+    message: "Convert snpAD VCF file into a FastA file for sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        vcf2fa = f"{workflow.basedir}/resources/snpAD-0.3.3/vcf2fasta.pl",
+    shell:
+        """
+        {params.vcf2fa} < {input} > {output}
+        """
+
+# Summary
+
 rule summary:
     input: expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES),
            expand("qual/{sample}/identity_histogram.pdf", sample=SAMPLES),

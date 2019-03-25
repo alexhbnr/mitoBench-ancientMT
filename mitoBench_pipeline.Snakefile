@@ -581,10 +581,6 @@ rule contamMix_estimate:
 
 # Genotype calling mit snpAD
 
-rule snpAD:
-    #input: expand("snpAD/{sample}.fasta", sample=SAMPLES)
-    input: expand("snpAD/{sample}.snpAD.vcf", sample=SAMPLES)
-
 rule bam2snpAD:
     input: 
         "bam/{sample}_MTonly.sorted.rmdup.bam"
@@ -626,9 +622,9 @@ rule snpAD_estimation:
 
 rule snpAD_call:
     input:
-        snpAD = "snpAD/{sample}.snpad_input"
-        priors = temp("snpAD/{sample}.priors.txt"),
-        errors = temp("snpAD/{sample}.errors.txt")
+        snpAD = "snpAD/{sample}.snpad_input",
+        priors = "snpAD/{sample}.priors.txt",
+        errors = "snpAD/{sample}.errors.txt"
     output:
         "snpAD/{sample}.snpAD.vcf"
     message: "Call the genotypes using snpAD for sample {wildcards.sample} fixing the likelihood of a heterozygous genotype to a very small number"
@@ -639,8 +635,8 @@ rule snpAD_call:
     shell:
         """
         {params.snpADcall} \
-                -e <(bioawk -t '$4 < 1e6{print $1, $2, $3, $4}' {input.errors}) \
-                -p $(cat {input.priors} |perl -F',' -lane 'for ($i=0 ; $i<4 ; $i++) { $F[$i]=$F[$i]/($F[0]+$F[1]+$F[2]+$F[3]); } for ($i=4; $i<@F; $i++) { $F[$i] = "1e-320" ; } print join ",",@F;') \
+                -e <(bioawk -t '$4 < 1e6{{print $1, $2, $3, $4}}' {input.errors}) \
+                -p $(cat {input.priors} |perl -F',' -lane 'for ($i=0 ; $i<4 ; $i++) {{ $F[$i]=$F[$i]/($F[0]+$F[1]+$F[2]+$F[3]); }} for ($i=4; $i<@F; $i++) {{ $F[$i] = "1e-320" ; }} print join ",",@F;') \
                 {input.snpAD} > {output}
         """
 
@@ -648,7 +644,8 @@ rule snpAD_vcf2fa:
     input:
         "snpAD/{sample}.snpAD.vcf"
     output:
-        "snpAD/{sample}.snpAD.fa"
+        fa = "snpAD/{sample}.snpAD.fasta",
+        tbi = "snpAD/{sample}.snpAD.vcf.gz.tbi"
     message: "Convert snpAD VCF file into a FastA file for sample {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.1"
@@ -657,6 +654,8 @@ rule snpAD_vcf2fa:
     shell:
         """
         {params.vcf2fa} < {input} > {output}
+        bgzip {input}
+        tabix {input}.gz
         """
 
 # Summary
@@ -669,7 +668,8 @@ rule summary:
            "logs/seqdepth.csv",
            expand("fasta/{sample}_angsd.fa", sample=SAMPLES),
            expand("fasta/{sample}_angsd_unclipped.fa", sample=SAMPLES),
-           expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES)
+           expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES),
+           expand("snpAD/{sample}.snpAD.fasta", sample=SAMPLES)
     output: "{projdir}/summary_table.csv"
     message: "Summarise the results in a table"
     version: "0.1"

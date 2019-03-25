@@ -3,7 +3,7 @@
 use strict ;
 
 # output seq (length fix according to reference used for mapping)
-my $seq = "N" x 16572 ;
+my $seq = "N" x 16569 ;
 # for PP field
 my %base2num = ( 'A' => 0, 'C' => 1, 'G' => 2, 'T' => 3 ) ;
 

@@ -217,6 +217,9 @@ rule bam_merge_wrap_sort:
     threads: 2
     shell:
         """
+        if [ -f {params.merged_bam} ]; then
+            rm {params.merged_bam}
+        fi
         samtools merge -c \
             {params.merged_bam} \
             {input.bam_12} \
@@ -228,7 +231,8 @@ rule bam_merge_wrap_sort:
             -f true \
             -x false \
             -i {params.merged_bam}
-        samtools sort -o {output} {params.realigned_bam}
+        samtools view -bh -L <(echo -e "MT\t0\t16569") {params.realigned_bam} | \
+        samtools sort -o {output} -
         rm {params.merged_bam} {params.realigned_bam}
         """
 
@@ -331,7 +335,7 @@ rule mixemt:
             echo -e "hap1\tNA\tNA\t0" > {params.mixemtprefix}.log
             touch {params.mixemtprefix}.pos.tab
         fi
-        rm {params.subbam}*
+        rm {params.subbam}
         """
 
 
@@ -434,7 +438,7 @@ rule haplogrep2:
     version: "0.1"
     shell:
         """
-        java -jar {workflow.basedir}/resources/haplogrep-2.1.19.jar \
+        java -Xms256m -Xmx1G -jar {workflow.basedir}/resources/haplogrep-2.1.19.jar \
             --in {input} \
             --extend-report \
             --format fasta \
@@ -532,6 +536,9 @@ rule contamMix_align_against_consensus:
             {params.subbam} | \
         samtools view -hb - > logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_0.bam
         # Merge sam files, re-wrap and sort
+        if [ -f logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam ]; then
+            rm logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam
+        fi
         samtools merge -c \
             logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam \
             logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_12.bam \
@@ -544,7 +551,9 @@ rule contamMix_align_against_consensus:
             -f true \
             -x false \
             -i logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam
-        samtools sort -o {output} logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120_realigned.bam
+        samtools view -bh -L <(echo -e "{wildcards.sample}\t0\t16569") \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120_realigned.bam | \
+        samtools sort -o {output} -
         # Clean
         rm logs/contamMix/{wildcards.sample}/{wildcards.sample}.*.sai \
            logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT* \
@@ -579,6 +588,87 @@ rule contamMix_estimate:
                 --tabOutput TRUE > {output}
         """
 
+# Genotype calling mit snpAD
+
+rule bam2snpAD:
+    input: 
+        "bam/{sample}_MTonly.sorted.rmdup.bam"
+    output:
+        temp("snpAD/{sample}.snpad_input")
+    message: "Convert BAM file into snpAD input format for sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        bam2snpAD = f"{workflow.basedir}/resources/snpAD-0.3.3/Bam2snpAD",
+        reffasta = f"{workflow.basedir}/resources/NC_012920.fa"   
+    shell:
+        """
+        {params.bam2snpAD} \
+                -r MT \
+                -f {params.reffasta} \
+                {input} > {output}
+        """
+
+rule snpAD_estimation:
+    input:
+        "snpAD/{sample}.snpad_input"
+    output:
+        priors = temp("snpAD/{sample}.priors.txt"),
+        errors = temp("snpAD/{sample}.errors.txt")
+    message: "Estimate the genotype likelihoods using snpAD for sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        snpAD = f"{workflow.basedir}/resources/snpAD-0.3.3/snpAD",
+    log: "snpAD/{sample}.snpAD.log"
+    shell:
+        """
+        {params.snpAD} \
+                -o {output.priors} \
+                -O {output.errors} \
+                {input} > {log} 2>&1
+        """
+
+rule snpAD_call:
+    input:
+        snpAD = "snpAD/{sample}.snpad_input",
+        priors = "snpAD/{sample}.priors.txt",
+        errors = "snpAD/{sample}.errors.txt"
+    output:
+        "snpAD/{sample}.snpAD.vcf"
+    message: "Call the genotypes using snpAD for sample {wildcards.sample} fixing the likelihood of a heterozygous genotype to a very small number"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        snpADcall = f"{workflow.basedir}/resources/snpAD-0.3.3/snpADCall",
+    shell:
+        """
+        {params.snpADcall} \
+                -e <(bioawk -t '$4 < 1e6{{print $1, $2, $3, $4}}' {input.errors}) \
+                -p $(cat {input.priors} |perl -F',' -lane 'for ($i=0 ; $i<4 ; $i++) {{ $F[$i]=$F[$i]/($F[0]+$F[1]+$F[2]+$F[3]); }} for ($i=4; $i<@F; $i++) {{ $F[$i] = "1e-320" ; }} print join ",",@F;') \
+                {input.snpAD} > {output}
+        """
+
+rule snpAD_vcf2fa:
+    input:
+        "snpAD/{sample}.snpAD.vcf"
+    output:
+        fa = "snpAD/{sample}.snpAD.fasta",
+        tbi = "snpAD/{sample}.snpAD.vcf.gz.tbi"
+    message: "Convert snpAD VCF file into a FastA file for sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.1"
+    params:
+        vcf2fa = f"{workflow.basedir}/resources/snpAD-0.3.3/vcf2fasta.pl",
+    shell:
+        """
+        {params.vcf2fa} < {input} > {output}
+        bgzip -f {input}
+        tabix -f {input}.gz
+        """
+
+# Summary
+
 rule summary:
     input: expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES),
            expand("qual/{sample}/identity_histogram.pdf", sample=SAMPLES),
@@ -587,7 +677,8 @@ rule summary:
            "logs/seqdepth.csv",
            expand("fasta/{sample}_angsd.fa", sample=SAMPLES),
            expand("fasta/{sample}_angsd_unclipped.fa", sample=SAMPLES),
-           expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES)
+           expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES),
+           expand("snpAD/{sample}.snpAD.fasta", sample=SAMPLES)
     output: "{projdir}/summary_table.csv"
     message: "Summarise the results in a table"
     version: "0.1"
@@ -699,15 +790,22 @@ rule summary:
           
           ### Non-clipped BAM files
           fas_nonclipped_fns <- list.files("fasta",
-                                        pattern = "_angsd_unclipped\\\.fa", full.names = T)
+                                           pattern = "_angsd_unclipped\\\.fa", full.names = T)
           fas_nonclipped <- lapply(fas_nonclipped_fns, function(fn) read.dna(fn, "fasta", as.character = T))
+          ### snpAD
+          fas_snpAD_fns <- list.files("snpAD",
+                                      pattern = "\\\.snpAD\\\.fasta", full.names = T)
+          fas_snpAD <- lapply(fas_snpAD_fns, function(fn) read.dna(fn, "fasta", as.character = T))
           ### Compare consensus sequences
           consensus_comparison <- map_df(seq(1, length(fas_clipped)), function(i) {{
                                           tibble(sample = str_replace(basename(fas_clipped_fns[i]),
                                                                       "_angsd\\\.fa", ""),
                                                  noNs = sum(fas_clipped[[i]] == "n"),
                                                  percentNs = round(noNs * 100 / 16569, 1),
-                                                 noDiffs = sum(fas_clipped[[i]] != fas_nonclipped[[i]]))
+                                                 noDiffs = sum(fas_clipped[[i]] != fas_nonclipped[[i]] & fas_clipped[[i]] != "n"),
+                                                 noNs_snpAD = sum(fas_snpAD[[i]] == "n"),
+                                                 percentNs_snpAD = round(noNs_snpAD * 100 / 16569, 1),
+                                                 noDiffs_snpAD = sum(fas_snpAD[[i]] != fas_clipped[[i]] & fas_clipped[[i]] != "n"))
                                         }})
           
           ## Haplogroup assignment
@@ -743,8 +841,10 @@ rule summary:
                            left_join(threeP_GtoA, by = "sample") %>%
                            rename(`no. of trimmed bases at 3'-end` = `3'_trBases`) %>%
                            left_join(consensus_comparison, by = "sample") %>%
-                           select(-noNs) %>%
-                           rename(`% of Ns in consensus sequence` = percentNs,
+                           select(-noNs, -noNs_snpAD) %>%
+                           rename(`% of Ns in clipped consensus sequence` = percentNs,
+                                  `% of Ns in snpAD consensus sequence` = percentNs_snpAD,
+                                  `no. of differences snpAD vs. clipped` = noDiffs_snpAD,
                                   `no. of differences clipped vs. non-clipped` = noDiffs) %>%
                            left_join(haplogrep, by = "sample") %>%
                            rename(`haplogroup clipped reads` = haplogroup,
@@ -786,10 +886,12 @@ rule copy_tmp_to_proj:
             cp qual/${{sm}}/Length_plot.pdf {PROJDIR}/sample_stats/${{sm}}/${{sm}}_Length_plot.pdf
             cp qual/${{sm}}/lgdistribution.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_lgdistribution.txt
             cp qual/${{sm}}/misincorporation.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_misincorporation.txt
-            # Unclipped FastA
-            cp fasta/${{sm}}_angsd_unclipped.fa {PROJDIR}/sample_stats/${{sm}}/${{sm}}_unclipped_consensus.fa
-            # Clipped FastA
-            cp fasta/${{sm}}_angsd.fa {PROJDIR}/fasta/${{sm}}.fa
+            # ANGSD FastA
+            cp fasta/${{sm}}_angsd_unclipped.fa {PROJDIR}/sample_stats/${{sm}}/${{sm}}_angsd_unclipped_consensus.fa
+            cp fasta/${{sm}}_angsd.fa {PROJDIR}/sample_stats/${{sm}}/${{sm}}_angsd_clipped_consensus.fa
+            # snpAD
+            cp snpAD/${{sm}}.snpAD.vcf.gz* {PROJDIR}/sample_stats/${{sm}}/
+            cp snpAD/${{sm}}.snpAD.fasta {PROJDIR}/fasta/${{sm}}.fa
         done
         cp logs/seqdepth.csv {PROJDIR}/sample_stats/
         """

@@ -34,14 +34,14 @@
 
     "bam_merge_wrap_sort" :
     {
-        "vfree"  : "5G",
-        "hvmem"  : "5G"
+        "vfree"  : "8G",
+        "hvmem"  : "8G"
     },
 
     "bam_rmdup" :
     {
-        "vfree"  : "5G",
-        "hvmem"  : "5G"
+        "vfree"  : "8G",
+        "hvmem"  : "8G"
     },
 
     "damage_profiler" :
@@ -84,8 +84,10 @@
 
     "haplogrep2" :
     {
-        "vfree"  : "6G",
-        "hvmem"  : "6G"
+        "vfree"  : "10G",
+        "hvmem"  : "10G",
+        "class"  : "default"
+
     },
 
     "contamMix_create_sequencePanel" :
@@ -103,7 +105,32 @@
     "contamMix_estimate" :
     {
         "vfree"  : "4G",
+        "hvmem"  : "4G",
+        "class"  : "default"
+    },
+
+    "bam2snpAD" :
+    {
+        "vfree"  : "4G",
         "hvmem"  : "4G"
+    },
+
+    "snpAD_estimation" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "snpAD_call" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "snpAD_vcf2fa" :
+    {
+        "vfree"  : "2G",
+        "hvmem"  : "2G"
     }
 
 }

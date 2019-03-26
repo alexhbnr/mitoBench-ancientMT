@@ -590,9 +590,6 @@ rule contamMix_estimate:
 
 # Genotype calling mit snpAD
 
-rule intermed:
-    input: expand("snpAD/{sample}.snpAD.fasta", sample=SAMPLES),
-
 rule bam2snpAD:
     input: 
         "bam/{sample}_MTonly.sorted.rmdup.bam"

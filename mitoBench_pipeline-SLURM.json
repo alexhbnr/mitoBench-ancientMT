@@ -38,14 +38,14 @@
 
     "bam_merge_wrap_sort" :
     {
-        "mem"       : "5K",
+        "mem"       : "8K",
         "partition" : "short",
         "time"      : "0-02:00"
     },
 
     "bam_rmdup" :
     {
-        "mem"       : "5K",
+        "mem"       : "8K",
         "partition" : "short",
         "time"      : "0-02:00"
     },
@@ -95,7 +95,7 @@
 
     "haplogrep2" :
     {
-        "mem"       : "6K",
+        "mem"       : "10K",
         "partition" : "short",
         "time"      : "0-02:00"
     },

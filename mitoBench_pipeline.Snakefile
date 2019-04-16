@@ -45,39 +45,6 @@ def mixemt_downsampling(flagstatfn):
     else:
         return 1.0
 
-
-def calcuate_trim_threshold(dirname, end):
-    ''' Infer the number of bases to trim on both the 5p and 3p end of reads to
-        avoid having issues with ancient DNA damage pattern for subsequent
-        consensus calling.
-        The threshold is determined and by calculating the mean and standard
-        deviation of the C > T and G > A substitution frequency for the last 25
-        bases as reported by DamageProfiler, respectively. As we expect a lower
-        substitution frequency towards the middle of a read, we determine the
-        first position, for which the subsitution frequency is within one
-        standard deviation of the mean, and remove all bases to the left of it
-        on the 5p end and all bases to the right on the 3p end.
-    '''
-    if os.path.isdir(dirname):
-        if end == "5p":  # 5' end
-            damageprof = pd.read_csv(dirname + "/5pCtoT_freq.txt", sep="\t",
-                                comment="#")
-        elif end == "3p":   # 3' end
-            damageprof = pd.read_csv(dirname + "/3pGtoA_freq.txt", sep="\t",
-                                comment="#")
-        damageprof.columns = ['pos', 'freq']
-
-        if damageprof['freq'].max() >= 0.02:  # only cut with C to T frequency >= 2%
-            threshold = damageprof['freq'].mean() + damageprof['freq'].std()
-            cut_position = damageprof.loc[damageprof['freq'] <= threshold]. \
-                    iloc[0].name
-        else:
-            cut_position = 0
-        return cut_position
-    else:
-        cut_position = 0
-
-
 # Snakemake rules
 wildcard_constraints:
     sample = config['sampleIDconstraint']
@@ -203,6 +170,10 @@ rule bwa_samse:
 
 
 rule bam_merge_wrap_sort:
+    # This command merges the paired reads and single reads aligned against the
+    # MT genome, wraps the alignment to its original length of 16 569 bp,
+    # filters for a minimal read length of 30bp and a minimal mapping quality
+    # of MQ25 and sorts the output
     input:
         bam_12 = "bam/{sample}_MT_12.bam",
         bam_0 = "bam/{sample}_MT_0.bam"
@@ -212,6 +183,7 @@ rule bam_merge_wrap_sort:
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.1"
     params: merged_bam = "bam/{sample}_MT_120.bam",
+            header = "bam/{sample}_MT_120.header",
             reffa = f"{workflow.basedir}/resources/NC_012920.fa",
             realigned_bam = "bam/{sample}_MT_120_realigned.bam"
     threads: 2
@@ -231,9 +203,12 @@ rule bam_merge_wrap_sort:
             -f true \
             -x false \
             -i {params.merged_bam}
-        samtools view -bh -L <(echo -e "MT\t0\t16569") {params.realigned_bam} | \
+        samtools view -H {params.merged_bam} > {params.header}
+        samtools view -L <(echo -e "MT\t0\t16569") -q 25 {params.realigned_bam} | \
+        bioawk -c sam '{{if (length($seq) >= 30){{print}}}}' | \
+        samtools reheader {params.header} - | \
         samtools sort -o {output} -
-        rm {params.merged_bam} {params.realigned_bam}
+        rm {params.merged_bam} {params.realigned_bam} {params.header}
         """
 
 
@@ -356,81 +331,9 @@ rule seqdepth:
         samtools depth -a -r MT {params.bams} >> {output}
         """
 
-# Consensus calling
-
-rule trim_bam:
-    input:
-        bam = "bam/{sample}_MTonly.sorted.rmdup.bam",
-        damageprof = "qual/{sample}/identity_histogram.pdf"
-    output:
-        "bam/{sample}_MTonly.sorted.rmdup.clip.bam"
-    message: "Soft-clip ends of reads with high amounts of DNA damage: {wildcards.sample}"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.1"
-    params:
-        p3_nbases = lambda wildcards: calcuate_trim_threshold(f"qual/{wildcards.sample}", "3p"),
-        p5_nbases = lambda wildcards: calcuate_trim_threshold(f"qual/{wildcards.sample}", "5p")
-    shell:
-        """
-        bam trimBam {input.bam} {output} -L {params.p5_nbases} -R {params.p3_nbases}
-        """
-
-rule angsd_consensus:
-    # Call consensus sequence as described by Ehler et al. (2018): amtDB 
-    input: "bam/{sample}_MTonly.sorted.rmdup.clip.bam"
-    output: "fasta/{sample}_angsd.fa"
-    message: "Call consensus sequence using ANGSD following Ehler et al. (2018): {wildcards.sample}"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.1"
-    threads: 2
-    params: reffasta = f"{workflow.basedir}/resources/NC_012920.fa",
-            dir = "fasta"
-    shell:
-        """
-        angsd \
-            -i {input} \
-            -minMapQ 30 \
-            -minQ 20 \
-            -doFasta 2 \
-            -doCounts 1 \
-            -ref {params.reffasta} \
-            -out {params.dir}/{wildcards.sample}_angsd.tmp
-        bioawk \
-            -c fastx '{{print ">{wildcards.sample}"; print $seq}}' \
-            {params.dir}/{wildcards.sample}_angsd.tmp.fa.gz > {output}
-        rm {params.dir}/{wildcards.sample}_angsd.tmp.*
-        """
-
-rule angsd_consensus_unclipped:
-    # Call consensus sequence as described by Ehler et al. (2018): amtDB 
-    input: "bam/{sample}_MTonly.sorted.rmdup.bam"
-    output: "fasta/{sample}_angsd_unclipped.fa"
-    message: "Call consensus sequence using ANGSD following Ehler et al. (2018) on unclipped BAM file: {wildcards.sample}"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.1"
-    threads: 2
-    params: reffasta = f"{workflow.basedir}/resources/NC_012920.fa",
-            dir = "fasta"
-    shell:
-        """
-        angsd \
-            -i {input} \
-            -minMapQ 30 \
-            -minQ 20 \
-            -doFasta 2 \
-            -doCounts 1 \
-            -ref {params.reffasta} \
-            -out {params.dir}/{wildcards.sample}_angsd_unclipped.tmp
-        bioawk \
-            -c fastx '{{print ">{wildcards.sample}"; print $seq}}' \
-            {params.dir}/{wildcards.sample}_angsd_unclipped.tmp.fa.gz > {output}
-        rm {params.dir}/{wildcards.sample}_angsd_unclipped.tmp.*
-        """
-
-
 rule haplogrep2:
     input:
-        "fasta/{sample}_angsd.fa"
+        "snpAD/{sample}.snpAD.fasta"
     output:
         "logs/haplogrep2/{sample}.hsd"
     message: "Determine mtDNA haplogroup for {wildcards.sample} using HaploGrep2"
@@ -449,7 +352,7 @@ rule haplogrep2:
 
 rule contamMix_create_sequencePanel:
     input:
-        "fasta/{sample}_angsd.fa"
+        "snpAD/{sample}.snpAD.fasta"
     output:
         "logs/contamMix/{sample}/sequence_panel.fasta"
     message: "Align consensus sequence of {wildcards.sample} to panel of 311 modern humans"
@@ -466,7 +369,7 @@ rule contamMix_create_sequencePanel:
 rule contamMix_align_against_consensus:
     input:
         flagstat = "logs/flagstat/{sample}.flagstat",
-        fas = "fasta/{sample}_angsd.fa",
+        fas = "snpAD/{sample}.snpAD.fasta",
         bam = "bam/{sample}_MTonly.sorted.rmdup.bam"
     output:
         "logs/contamMix/{sample}/{sample}.consensus_aligned.bam"
@@ -551,8 +454,11 @@ rule contamMix_align_against_consensus:
             -f true \
             -x false \
             -i logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam
-        samtools view -bh -L <(echo -e "{wildcards.sample}\t0\t16569") \
-                logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120_realigned.bam | \
+        samtools view -H logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120_realigned.bam \
+                > logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.header
+        samtools view -L <(echo -e "MT\t0\t16569") -q 25 logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120_realigned.bam | \
+        bioawk -c sam '{{if (length($seq) >= 30){{print}}}}' | \
+        samtools reheader logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.header - | \
         samtools sort -o {output} -
         # Clean
         rm logs/contamMix/{wildcards.sample}/{wildcards.sample}.*.sai \
@@ -604,6 +510,8 @@ rule bam2snpAD:
     shell:
         """
         {params.bam2snpAD} \
+                -Q 25 \
+                -q 30 \
                 -r MT \
                 -f {params.reffasta} \
                 {input} > {output}
@@ -675,8 +583,6 @@ rule summary:
            expand("logs/mixemt/{sample}.mixemt.pos.tab", sample=SAMPLES),
            expand("logs/contamMix/{sample}/contamMix_log.txt", sample=SAMPLES),
            "logs/seqdepth.csv",
-           expand("fasta/{sample}_angsd.fa", sample=SAMPLES),
-           expand("fasta/{sample}_angsd_unclipped.fa", sample=SAMPLES),
            expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES),
            expand("snpAD/{sample}.snpAD.fasta", sample=SAMPLES)
     output: "{projdir}/summary_table.csv"
@@ -754,58 +660,22 @@ rule summary:
                               mutate(sample = s,
                                      label = paste0(round(propAuth * 100, 2), "% (",
                                                     round(propAuth_lowerQuantile * 100, 2), "-",
-                                                    round(propAuth_upperQuantile * 100, 2), "%)")) %>%
-                              select(sample, proportionAuthentic = label)
+                                                    round(propAuth_upperQuantile * 100, 2), "%)"),
+                                     flagContamination = ifelse(propAuth < 0.9)) %>%
+                              select(sample, proportionAuthentic = label, flagContamination)
                               }})
           
-          ## Number of trimmed bases
-          ### 5' end
-          fiveP_CtoT <- map_df(seqdepth$sample, function(s) {{
-                          damage <- fread(paste("qual", s, "5pCtoT_freq.txt", sep="/")) 
-                          threshold <- mean(damage$`5pC>T`) + sd(damage$`5pC>T`)
-                          cut_position <- filter(damage, `5pC>T` <= threshold) %>%
-                                          slice(1) %>%
-                                          pull(pos) - 1
-                          tibble(sample = s,
-                                 `5'_trBases` = ifelse(max(damage$`5pC>T`) >= 0.02,
-                                                       cut_position, 0))
-                        }})
-          ### 3' end
-          threeP_GtoA <- map_df(seqdepth$sample, function(s) {{
-                          damage <- fread(paste("qual", s, "3pGtoA_freq.txt", sep="/")) 
-                          threshold <- mean(damage$`3pG>A`) + sd(damage$`3pG>A`)
-                          cut_position <- filter(damage, `3pG>A` <= threshold) %>%
-                                          slice(1) %>%
-                                          pull(pos) - 1
-                          tibble(sample = s,
-                                 `3'_trBases` = ifelse(max(damage$`3pG>A`) >= 0.02,
-                                                       cut_position, 0))
-                        }})
-          
-          ## Consensus sequence comparison
-          ### Clipped BAM files
-          fas_clipped_fns <- list.files("fasta",
-                                        pattern = "_angsd\\\.fa", full.names = T)
-          fas_clipped <- lapply(fas_clipped_fns, function(fn) read.dna(fn, "fasta", as.character = T))
-          
-          ### Non-clipped BAM files
-          fas_nonclipped_fns <- list.files("fasta",
-                                           pattern = "_angsd_unclipped\\\.fa", full.names = T)
-          fas_nonclipped <- lapply(fas_nonclipped_fns, function(fn) read.dna(fn, "fasta", as.character = T))
-          ### snpAD
+          ## Consensus sequence
           fas_snpAD_fns <- list.files("snpAD",
                                       pattern = "\\\.snpAD\\\.fasta", full.names = T)
           fas_snpAD <- lapply(fas_snpAD_fns, function(fn) read.dna(fn, "fasta", as.character = T))
           ### Compare consensus sequences
           consensus_comparison <- map_df(seq(1, length(fas_clipped)), function(i) {{
-                                          tibble(sample = str_replace(basename(fas_clipped_fns[i]),
-                                                                      "_angsd\\\.fa", ""),
-                                                 noNs = sum(fas_clipped[[i]] == "n"),
+                                          tibble(sample = str_replace(basename(fas_snpAD_fns[i]),
+                                                                      "\\\.snpAD\\\.fasta", ""),
+                                                 noNs = sum(fas_snpAD[[i]] == "n"),
                                                  percentNs = round(noNs * 100 / 16569, 1),
-                                                 noDiffs = sum(fas_clipped[[i]] != fas_nonclipped[[i]] & fas_clipped[[i]] != "n"),
-                                                 noNs_snpAD = sum(fas_snpAD[[i]] == "n"),
-                                                 percentNs_snpAD = round(noNs_snpAD * 100 / 16569, 1),
-                                                 noDiffs_snpAD = sum(fas_snpAD[[i]] != fas_clipped[[i]] & fas_clipped[[i]] != "n"))
+                                                 flagMissingness = ifelse(percentNs > 1)
                                         }})
           
           ## Haplogroup assignment
@@ -841,18 +711,17 @@ rule summary:
                            left_join(threeP_GtoA, by = "sample") %>%
                            rename(`no. of trimmed bases at 3'-end` = `3'_trBases`) %>%
                            left_join(consensus_comparison, by = "sample") %>%
-                           select(-noNs, -noNs_snpAD) %>%
-                           rename(`% of Ns in clipped consensus sequence` = percentNs,
-                                  `% of Ns in snpAD consensus sequence` = percentNs_snpAD,
-                                  `no. of differences snpAD vs. clipped` = noDiffs_snpAD,
-                                  `no. of differences clipped vs. non-clipped` = noDiffs) %>%
+                           select(-noNs) %>%
+                           rename(`% of Ns in snpAD consensus sequence` = percentNs_snpAD,
+                                  `flagged due to number of missing bases (> 1%)` = flagMissingness) %>%
                            left_join(haplogrep, by = "sample") %>%
                            rename(`haplogroup clipped reads` = haplogroup,
                                   `haplogroup quality` = hgQ,
                                   `no. of not-found polys` = noNotFoundPolys,
                                   `no. of remaining polys` = noRemainingPolys) %>%
                            left_join(contamMix, by = "sample") %>%
-                           rename(`proportion of authentic DNA (contamMix)` = proportionAuthentic) %>%
+                           rename(`proportion of authentic DNA (contamMix)` = proportionAuthentic,
+                                  `flagged due to contamination (> 10%)` = flagContamination) %>%
                            left_join(mixemt, by = "sample") %>%
                            rename(`haplogroup contributions (mixEMT)` = mixEMT)   
           fwrite(summary_table,
@@ -886,9 +755,6 @@ rule copy_tmp_to_proj:
             cp qual/${{sm}}/Length_plot.pdf {PROJDIR}/sample_stats/${{sm}}/${{sm}}_Length_plot.pdf
             cp qual/${{sm}}/lgdistribution.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_lgdistribution.txt
             cp qual/${{sm}}/misincorporation.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_misincorporation.txt
-            # ANGSD FastA
-            cp fasta/${{sm}}_angsd_unclipped.fa {PROJDIR}/sample_stats/${{sm}}/${{sm}}_angsd_unclipped_consensus.fa
-            cp fasta/${{sm}}_angsd.fa {PROJDIR}/sample_stats/${{sm}}/${{sm}}_angsd_clipped_consensus.fa
             # snpAD
             cp snpAD/${{sm}}.snpAD.vcf.gz* {PROJDIR}/sample_stats/${{sm}}/
             cp snpAD/${{sm}}.snpAD.fasta {PROJDIR}/fasta/${{sm}}.fa

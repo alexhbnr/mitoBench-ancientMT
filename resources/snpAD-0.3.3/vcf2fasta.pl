@@ -23,22 +23,24 @@ while (<STDIN>) {
 	@alleles = ( $ref, split ",", $alt ) if ( $alt ne "." ) ;
 #	print "$chrom $pos $alleles[0] $alleles[1] $info{GT}\n" ;
 	
-	if ( $info{GT} eq "0/0" ) { substr( $seq, $pos-1, 1 ) = $alleles[0] ; }
-	elsif ( $info{GT} eq "1/1" ) { substr( $seq, $pos-1, 1 ) = $alleles[1] ; }
-	elsif ( $info{GT} eq "0/1" ) { 
-		my @PP = split ",", $info{PP} ;
-		if ( $PP[$base2num{$alleles[0]}] < $PP[$base2num{$alleles[1]}] ) {
-			substr( $seq, $pos-1, 1 ) = $alleles[0] ;
-		} elsif ( $PP[$base2num{$alleles[0]}] > $PP[$base2num{$alleles[1]}] ){ 
-			substr( $seq, $pos-1, 1 ) = $alleles[1] ;
-		} # else: stick with N
-	} elsif ( $info{GT} eq "1/2" ) {
-		my @PP = split ",", $info{PP} ;
-		if ( $PP[$base2num{$alleles[1]}] < $PP[$base2num{$alleles[2]}] ) {
-			substr( $seq, $pos-1, 1 ) = $alleles[1] ;
-		} elsif ( $PP[$base2num{$alleles[1]}] > $PP[$base2num{$alleles[2]}] ){ 
-			substr( $seq, $pos-1, 1 ) = $alleles[2] ;
-		} # else: stick with N
+	if ($info{DP} ge 3 & $qual ge 50) {
+        if ( $info{GT} eq "0/0" ) { substr( $seq, $pos-1, 1 ) = $alleles[0] ; }
+        elsif ( $info{GT} eq "1/1" ) { substr( $seq, $pos-1, 1 ) = $alleles[1] ; }
+        elsif ( $info{GT} eq "0/1" ) { 
+            my @PP = split ",", $info{PP} ;
+            if ( $PP[$base2num{$alleles[0]}] < $PP[$base2num{$alleles[1]}] ) {
+                substr( $seq, $pos-1, 1 ) = $alleles[0] ;
+            } elsif ( $PP[$base2num{$alleles[0]}] > $PP[$base2num{$alleles[1]}] ){ 
+                substr( $seq, $pos-1, 1 ) = $alleles[1] ;
+            } # else: stick with N
+        } elsif ( $info{GT} eq "1/2" ) {
+            my @PP = split ",", $info{PP} ;
+            if ( $PP[$base2num{$alleles[1]}] < $PP[$base2num{$alleles[2]}] ) {
+                substr( $seq, $pos-1, 1 ) = $alleles[1] ;
+            } elsif ( $PP[$base2num{$alleles[1]}] > $PP[$base2num{$alleles[2]}] ){ 
+                substr( $seq, $pos-1, 1 ) = $alleles[2] ;
+            } # else: stick with N
+        }
 	}
 }
 

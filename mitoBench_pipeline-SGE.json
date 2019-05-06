@@ -63,25 +63,6 @@
         "class"  : "default"
     },
 
-    "trim_bam" :
-    {
-        "vfree"  : "3G",
-        "hvmem"  : "3G"
-    },
-
-    "angsd_consensus" :
-    {
-        "vfree"  : "3G",
-        "hvmem"  : "3G"
-    },
-
-
-    "angsd_consensus_unclipped" :
-    {
-        "vfree"  : "3G",
-        "hvmem"  : "3G"
-    },
-
     "haplogrep2" :
     {
         "vfree"  : "10G",

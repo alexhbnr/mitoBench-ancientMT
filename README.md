@@ -96,7 +96,7 @@ snakemake -s mitoBench_pipeline.Snakefile \
           --cluster 'qsub -pe smp {threads} -l virtual_free={cluster.vfree},h_vmem={cluster.hvmem},class={cluster.class} -o {cluster.out} -e {cluster.err}' \
           --use-conda \
           --local-cores 8 \
-          --cores 100
+          --jobs 100
 ```
 
 If some of these parameters are not available or not feasible for your local

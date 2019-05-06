@@ -21,9 +21,8 @@ while (<STDIN>) {
 
 	my @alleles = ( $ref ) ;
 	@alleles = ( $ref, split ",", $alt ) if ( $alt ne "." ) ;
-#	print "$chrom $pos $alleles[0] $alleles[1] $info{GT}\n" ;
 	
-	if ($info{DP} ge 3 & $qual ge 50) {
+	if ($info{DP} >= 3 & $qual >= 50) {
         if ( $info{GT} eq "0/0" ) { substr( $seq, $pos-1, 1 ) = $alleles[0] ; }
         elsif ( $info{GT} eq "1/1" ) { substr( $seq, $pos-1, 1 ) = $alleles[1] ; }
         elsif ( $info{GT} eq "0/1" ) { 

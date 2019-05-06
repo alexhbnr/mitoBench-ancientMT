@@ -71,28 +71,6 @@
         "time"      : "1-00:00"
     },
 
-    "trim_bam" :
-    {
-        "mem"       : "3K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-    "angsd_consensus" :
-    {
-        "mem"       : "3K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-
-    "angsd_consensus_unclipped" :
-    {
-        "mem"       : "3K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
     "haplogrep2" :
     {
         "mem"       : "10K",

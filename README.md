@@ -96,7 +96,7 @@ snakemake -s mitoBench_pipeline.Snakefile \
           --cluster 'qsub -pe smp {threads} -l virtual_free={cluster.vfree},h_vmem={cluster.hvmem},class={cluster.class} -o {cluster.out} -e {cluster.err}' \
           --use-conda \
           --local-cores 8 \
-          --jobs 100
+          --jobs 50
 ```
 
 If some of these parameters are not available or not feasible for your local
@@ -160,16 +160,14 @@ The steps of the pipeline are:
      and calculate the fraction of reads that correspond to 30,000 reads for
      later down-sampling using `samtools view` using seed 0.
   8. Infer the per-base sequencing depth of all samples using `samtools depth`.
-  9. Calculate the number of bases to trim from both the 5' and 3' end of a read
-     by calculating the mean frequency of C to T substitutions at the 5' end and
-     of G to A substitutions on the 3' end, respectively, as well as the
-     standard deviation. All bases are trimmed that are above the threshold of
-     the mean frequency plus one standard deviation regarding their
-     substitutions, in case the threshold is >= 2%, otherwise no bases are
-     trimmed. Trim the bases using `bamUtil trimBam`.
-  10. Call the consensus sequences using `ANGSD` requiring a minimal base
-      quality of 30 and minimal mapping quality of 20 based on both the clipped
-      and non-clipped sequencing data.
+  9. Call the consensus sequences using `snpAD` requiring a minimal base
+     quality of 30 and minimal mapping quality of 25. snpAD calculates the
+     genotype likelihood at each site along the human mtDNA reference genome
+     considering ancient DNA damage in its error model. As the program was
+     designed for determining diploid genotypes, we manually set the genotype
+     likelihood for heterozygous genotype calls to a very small number. We only
+     call a genotype at a site if the sequencing depth was at least 3 and the
+     genotype quality was at least 50.
   11. Infer the haplogroup using `HaploGrep2` using the consensus sequence
       called from the clipped sequencing data.
   12. Infer the haplogroups and their proportion of contribution to the pool of
@@ -184,15 +182,18 @@ When all these steps are run, the results are summarised in a table called
   - the mean and the standard deviation of the coverage across the genome and
     the number of sites with at least 5-fold coverage
   - the mode of the read length distribution
-  - the number of trimmed bases separately calculated for the 5' and the 3' end
-  - the percentage of missing information (Ns) in the consensus sequences called
-    from the clipped sequencing data
-  - the number of differences between the consensus sequences called from the
-    clipped and non-clipped sequencing data
+  - the number of missing genotypes (Ns) in the consensus sequence
   - the inferred haplogroup, the quality of the haplogroup assignment and the
     number of non-found and remaining polymorphisms, respectively
-  - the proportion of authentic, non-contaminant DNA
+  - the contaminant DNA as inferred by contamMix
   - the haplogroups and their proportions of contribution to the sequencing pool
+    as determined by mixEMT
+
+The table contains two columns to flag low quality samples: *flagged due to
+number of missing bases (> 1%)* and *flagged due to contamination (> 10%)*. If a
+sample fulfils any of the two criteria, either having > 1% missing genotypes in
+the consensus sequence or a contamination estimate > 10%, the sample will
+flagged as a **low quality** sample.
 
 Further, the consensus sequences based on the clipped sequencing data will be
 copied to the directory `fasta` in the specified project folder and the raw

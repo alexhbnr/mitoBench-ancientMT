@@ -661,7 +661,7 @@ rule summary:
                                   contr = paste0(contr * 100, "%"),
                                   label = paste0(hg, " (", contr, ",", noReads, ")")) %>%
                            group_by(sample) %>%
-                           summarise(mixEMT = str_replace(toString(label), ", ", ";"))
+                           summarise(mixEMT = str_replace_all(toString(label), ", ", ";"))
                            }})
           ### contamMix
           contamMix <- map_df(seqdepth$sample, function(s) {{

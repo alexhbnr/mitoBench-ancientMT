@@ -496,7 +496,7 @@ rule contamMix_estimate:
         R -e 'if (!("contamMix" %in% installed.packages())) {{ \
                 install.packages(c("coda", "getopt"), , repos="http://cran.us.r-project.org"); \
                 install.packages("{params.tarball}", type="source")}}'
-        {params.contamMix_exec} \
+        Rscript {params.contamMix_exec} \
                 --samFn {input.bam} \
                 --malnFn {input.aln} \
                 --tabOutput TRUE > {output}

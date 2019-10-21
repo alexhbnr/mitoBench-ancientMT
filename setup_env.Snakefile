@@ -96,9 +96,9 @@ rule simulate_circulargenerator:
 
 rule download_haplogrep:
     output:
-        "{PATH}/resources/haplogrep-2.1.19.jar"
+        "{PATH}/resources/haplogrep-2.1.25.jar"
     message: "Download haplogrep-cmd from GitHub"
-    params: url = "https://github.com/seppinho/haplogrep-cmd/releases/download/v2.1.19/haplogrep-2.1.19.jar"
+    params: url = "https://github.com/seppinho/haplogrep-cmd/releases/download/2.1.25/haplogrep-2.1.25.jar"
     shell:
         "wget -O {output} {params.url}"
 

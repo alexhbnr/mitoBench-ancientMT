@@ -1,8 +1,10 @@
 {
     "samplelist" : "", 
-    "bamdir" : "",
+    "seqdatadir" : "",
+    "seqdatatype" : "fastq",
+    "seqdatasuffix" : "fastq.gz",
     "projdir" : "",
     "tmpdir" : "",
-    "bamsuffix" : "bam",
-    "sampleIDconstraint" : "[A-Za-z0-9\\.]+"
+    "sampleIDconstraint" : "[A-Za-z0-9\\.]+",
+    "targetreads": 30000,
 }

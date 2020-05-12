@@ -74,6 +74,7 @@ rule prepare_fastq:
     output:
         "seqdata/{sample}_1.raw_fastq.gz"
     message: "Prepare FastQ files for sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: 0.3
     threads: 1
     params:
@@ -83,21 +84,8 @@ rule prepare_fastq:
         pe2 = "seqdata/{sample}_2.raw_fastq.gz",
         pe0 = "seqdata/{sample}_0.raw_fastq.gz",
         outdir = "seqdata"
-    run:
-        if config['seqdatatype'] == "fastq":
-            for fqfn in glob(f"{config['seqdatadir']}/{wildcards.sample}*.{config['seqdatasuffix']}"):
-                if any([f"_{i}" in os.path.basename(fqfn) for i in range(3)]):
-                    os.symlink(f"{fqfn}", f"{params.outdir}/"
-                               f"{os.path.basename(fqfn).replace('.' + config['seqdatasuffix'], '')}"
-                               ".raw_fastq.gz")
-                else:
-                    os.symlink(f"{fqfn}", f"{params.outdir}/"
-                               f"{os.path.basename(fqfn).replace('.' + config['seqdatasuffix'], '')}" 
-                               "_1.raw_fastq.gz")
-        elif config['seqdatatype'] == "bam":
-            subprocess.run(f"samtools fastq -0 {params.pe0} -1 {output[0]} "
-                           f"-2 {params.pe2} {config['seqdatadir']}/{wildcards.sample}.{params.suffix}",
-                           shell=True)
+    script:
+        "scripts/prepare_fastq.py"
 
 rule determine_sequencing_type:
     # Determine if the sequencing data is single-end (1) or paired-end (2) and
@@ -493,37 +481,12 @@ rule revert_bamrewrap:
     output:
         temp("seqdata/{sample}_MTonly.nsorted.norerwap.bam")
     message: "Revert bam-wrap by removing multiple occurrences of reads for {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     params:
         state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
-    run:
-        if params.state == "Pass":
-            bamfile = pysam.AlignmentFile(input[0])
-
-            reads = []
-            prevread = ""
-            with pysam.AlignmentFile(output[0], "wb", template=bamfile) as outfile:
-                for i, read in enumerate(bamfile):
-                    if not read.is_unmapped and not read.mate_is_unmapped:
-                        if read.query_name != prevread and prevread != "":
-                            if ((reads[0].is_paired and len(reads) > 2) or
-                                (not reads[0].is_paired and len(reads) > 1)):  # one duplicated read
-                                read_orient = [r.is_read1 for r in reads]
-                                if sum(read_orient) > 1:  # forward read got duplicated
-                                    del reads[1]
-                                else:  # reverse read got duplicated
-                                    if len(reads) > 2:  # for paired reads
-                                        del reads[2]
-                                    else:  # for single reads
-                                        del reads[1]
-                            for r in reads:
-                                outfile.write(r)
-                            reads = []
-                        reads.append(read)
-                        prevread = read.query_name
-        else:
-            with open(output[0], "wt") as outfile:
-                pass
+    script:
+        "scripts/revert_bamrewrap.py"
 
 rule sort_norewrap:
     # Sort the BAM file after reverting bam-wrap by position 

@@ -1,15 +1,20 @@
 ################################################################################
-# Snakefile for the processing of ancient DNA human mtDNA capture data
-#
-# Alex Huebner, 21/02/19
+# Snakefile for the processing of sequencing data for human mtDNA
 ################################################################################
 
+__author__ = ('Alexander Hübner (alexhbnr@gmail.com)')
+__version__ = '0.3'
+__date__ = '08 May 2020'
+
 from snakemake.utils import min_version
-from snakemake.utils import R
 
 from glob import glob
 import os
+import re
+import subprocess 
+
 import pandas as pd
+import pysam
 
 min_version("5.0")
 shell.executable("/bin/bash")
@@ -20,28 +25,36 @@ workdir: config['tmpdir']
 
 if not os.path.isdir(f"{config['tmpdir']}/cluster_logs"):
     os.makedirs(f"{config['tmpdir']}/cluster_logs")
+if not os.path.isdir(f"{config['tmpdir']}/tmp"):
+    os.makedirs(f"{config['tmpdir']}/tmp")
 
-# Infer expected sample ids and paths to the corresponding BAM files from config 
-
-SAMPLES = [line.rstrip() for line in open(config['samplelist'], "rt")]
-BAMS = {sample: "{}/{}.{}".format(config['bamdir'], sample, config['bamsuffix'])
-        for sample in SAMPLES}
+# Read the sample list with sequence type (single-end, paired-end)
+# Expected two columns: sample\tseqdatatype
+SAMPLESLIST = pd.read_csv(config['samplelist'], sep="\t", index_col=['sample'])
+SAMPLES = SAMPLESLIST.index.tolist()
 
 # Extract project directory
 PROJDIR = config['projdir']
 
 # Auxilliary functions
 
-def mixemt_downsampling(flagstatfn):
+def check_state(fn):
+    """Check whether sample passed the minimum number of reads."""
+    if os.path.isfile(fn):
+        return next(open(fn, "rt")).rstrip()
+    else:
+        return "Pass"
+
+def mixemt_downsampling(flagstatfn, targetreads=config['targetreads']):
     ''' Determines the number of reads in a BAM file based on samtools flagstat
         and calculates the fraction of reads necessary to obtain 40,000 reads,
         the suggested input into mixEMT. The fraction will be used as input into
         samtools view -s for subsampling with SEED 0.
     '''
-    if os.path.isfile(flagstatfn):
+    if os.path.isfile(flagstatfn) and not os.stat(flagstatfn).st_size == 0:
         with open(flagstatfn, "rt") as flagstatfile:
             nreads = int(next(flagstatfile).split(" ")[0])
-        return "{:.4f}".format(30000 / nreads)
+        return "{:.4f}".format(targetreads / nreads)
     else:
         return 1.0
 
@@ -49,113 +62,194 @@ def mixemt_downsampling(flagstatfn):
 wildcard_constraints:
     sample = config['sampleIDconstraint']
 
-localrules: link_index, seqdepth, contamMix_align_against_consensus, summary, copy_tmp_to_proj
+localrules: seqdepth, contamMix_align_against_consensus, summary, copy_tmp_to_proj
 
 rule all:
-    input: expand("{projdir}/summary_table.csv", projdir=[PROJDIR]),
-           expand("{projdir}/fasta/{sample}.fa", projdir=[PROJDIR], sample=SAMPLES)
-
-# Prepare sorted, duplicate removed BAM files aligned only against the MT genome
-
-rule link_index:
-    # Link the raw data to file and index the BAM file in order to retrieve only
-    # the MT reads
-    output:
-        bam = "rawdata/{sample}.bam",
-        bai = "rawdata/{sample}.bam.bai"
-    message: "Link the BAM file to the temp directory and index it: {wildcards.sample}"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params:
-        bam = lambda wildcards: BAMS[wildcards.sample]
-    threads: 1
-    shell:
-        """
-        ln -s {params.bam} ${{PWD}}/rawdata/{wildcards.sample}.bam
-        samtools index rawdata/{wildcards.sample}.bam
-        """
-
-
-rule extract_MT_reads:
-    # Extract all reads that aligned against the MT genome without considering
-    # the mapping quality
     input:
-        bam = "rawdata/{sample}.bam",
-        bai = "rawdata/{sample}.bam.bai"
+        expand("{projdir}/{sample}/summary_table.csv", projdir=[PROJDIR], sample=SAMPLES),
+        expand("{projdir}/{sample}/{sample}.fa", projdir=[PROJDIR], sample=SAMPLES),
+
+rule prepare_fastq:
+    # Convert BAM files to FastQ or link FastQ files 
     output:
-        temp("bam/{sample}_MT.bam")
-    message: "Extract the MT reads from sample {wildcards.sample}"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: 
-        region = "MT"
+        "seqdata/{sample}_1.raw_fastq.gz"
+    message: "Prepare FastQ files for sample {wildcards.sample}"
+    version: 0.3
     threads: 1
+    params:
+        seqdir = config['seqdatadir'],
+        datatype = config['seqdatatype'],
+        suffix = config['seqdatasuffix'],
+        pe2 = "seqdata/{sample}_2.raw_fastq.gz",
+        pe0 = "seqdata/{sample}_0.raw_fastq.gz",
+        outdir = "seqdata"
+    run:
+        if config['seqdatatype'] == "fastq":
+            for fqfn in glob(f"{config['seqdatadir']}/{wildcards.sample}*.{config['seqdatasuffix']}"):
+                if any([f"_{i}" in os.path.basename(fqfn) for i in range(3)]):
+                    os.symlink(f"{fqfn}", f"{params.outdir}/"
+                               f"{os.path.basename(fqfn).replace('.' + config['seqdatasuffix'], '')}"
+                               ".raw_fastq.gz")
+                else:
+                    os.symlink(f"{fqfn}", f"{params.outdir}/"
+                               f"{os.path.basename(fqfn).replace('.' + config['seqdatasuffix'], '')}" 
+                               "_1.raw_fastq.gz")
+        elif config['seqdatatype'] == "bam":
+            subprocess.run(f"samtools fastq -0 {params.pe0} -1 {output[0]} "
+                           f"-2 {params.pe2} {config['seqdatadir']}/{wildcards.sample}.{params.suffix}",
+                           shell=True)
+
+rule determine_sequencing_type:
+    # Determine if the sequencing data is single-end (1) or paired-end (2) and
+    # whether reads have been merged (3)
+    input:
+        "seqdata/{sample}_1.raw_fastq.gz"
+    output:
+        "checkpoint/{sample}.seqtype"
+    message: "Determine sequencing data type for sample {wildcards.sample}"
+    version: 0.3
+    threads: 1
+    params:
+        dir = "seqdata"
+    run:
+        with open(output[0], "wt") as outfile:
+            outfile.write(str(len(glob(f"{params.dir}/{wildcards.sample}*.raw_fastq.gz"))) + "\n")
+
+rule adapter_removal:
+    # Run AdapterRemoval to trim adapters and merge overlapping reads
+    input:
+        fq = "seqdata/{sample}_1.raw_fastq.gz",
+        chkpt = "checkpoint/{sample}.seqtype"
+    output: 
+        pe0 = temp("seqdata/{sample}_0.fastq.gz")
+    message: "Remove adapter sequences collapsing overlapping sequences: {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: 0.3
+    threads: 8
+    log: "logs/adapterremoval/{sample}.adapterremoval.log"
+    params: 
+        seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
+        input_pe1 = "seqdata/{sample}_1.raw_fastq.gz",
+        input_pe2 = "seqdata/{sample}_2.raw_fastq.gz",
+        basename = "tmp/{sample}",
+        output_pe1 = "seqdata/{sample}_1.fastq.gz",
+        output_pe2 = "seqdata/{sample}_2.fastq.gz",
     shell:
         """
-        samtools view -bh \
-                -o {output} {input.bam} {params.region}
+        if [[ "{params.seqtype}" = "2" ]]; then
+            /projects1/mitoBench/conda/bin/AdapterRemoval \
+                    --file1 {params.input_pe1} \
+                    --file2 {params.input_pe2} \
+                    --output1 {params.output_pe1} \
+                    --output2 {params.output_pe2} \
+                    --outputcollapsed {output.pe0} \
+                    --settings {log} \
+                    --basename {params.basename} \
+                    --trimns --trimqualities \
+                    --minlength 30 \
+                    --minquality 20 \
+                    --minadapteroverlap 1 \
+                    --collapse \
+                    --gzip \
+                    --threads {threads}
+            rm {params.input_pe2}
+        else
+            /projects1/mitoBench/conda/bin/AdapterRemoval \
+                    --file1 {input.fq} \
+                    --output1 {output.pe0} \
+                    --settings {log} \
+                    --basename {params.basename} \
+                    --trimns --trimqualities \
+                    --minlength 30 \
+                    --minquality 20 \
+                    --gzip \
+                    --threads {threads}
+        fi
+        rm -r {params.basename}*
         """
-
 
 rule bwa_aln:
+    # Align reads against human MT genome with 1,000 bp overhang 
     input:
-        "bam/{sample}_MT.bam"
+        "seqdata/{sample}_0.fastq.gz"
     output:
-        temp("bam/{sample}_MT.{i}.sai")
+        temp("seqdata/{sample}_MT.{i}.sai")
     message: "Align reads of type {wildcards.i} of sample {wildcards.sample} to only the MT genome with 1000bp overhang with MPI EVA BWA ancient settings (no seed)"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa"
+    version: "0.3"
+    params:
+        seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
+        reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
+        fastq = "seqdata/{sample}_{i}.fastq.gz"
     threads: 8
     shell:
         """
-        bwa aln \
-            -t {threads} \
-            -n 0.01 -o 2 -l 16500 \
-            -b -{wildcards.i} \
-            -f {output} \
-            {params.reffa} \
-            {input}
+        if [[ "{params.seqtype}" = "single" ]] && [[ "{wildcards.i}" -ne 0 ]]; then
+            touch {output}
+        else
+            bwa aln \
+                -t {threads} \
+                -n 0.01 -o 2 -l 16500 \
+                -f {output} \
+                {params.reffa} \
+                {params.fastq}
+        fi
         """
 
-
 rule bwa_sampe:
+    # Extract the alignment coordinates of paired reads and convert alignment
+    # into BAM format filtering for reads mapped as a proper pair and have a
+    # sequence length >= 30 bp
     input:
-        bam = "bam/{sample}_MT.bam",
-        sais = lambda wildcards: [f"bam/{wildcards.sample}_MT.{i}.sai" for i in range(0, 3)]
+        sais = lambda wildcards: [f"seqdata/{wildcards.sample}_MT.{i}.sai" for i in range(0, 3)],
+        pe0 = "seqdata/{sample}_0.fastq.gz"
     output:
-        temp("bam/{sample}_MT_12.bam")
+        temp("seqdata/{sample}_MT_12.bam")
     message: "Generate BAM for non-merged reads of sample {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
-            readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample)
+    version: "0.3"
+    params: 
+        seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
+        reffa = "/projects1/mitoBench/resources/NC_012920_1000.fa",
+        readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample),
+        input_pe1 = "seqdata/{sample}_1.fastq.gz",
+        input_pe2 = "seqdata/{sample}_2.fastq.gz"
     threads: 2
     shell:
         """
-        bwa sampe \
-            -r '{params.readgroup}' \
-            -f /dev/stdout \
-            {params.reffa} \
-            {input.sais[1]} \
-            {input.sais[2]} \
-            {input.bam} \
-            {input.bam} | \
-        samtools view -hb - > {output}
+        if [[ "{params.seqtype}" = "paired" ]]; then
+            bwa sampe \
+                -r '{params.readgroup}' \
+                -f /dev/stdout \
+                {params.reffa} \
+                {input.sais[1]} \
+                {input.sais[2]} \
+                {params.input_pe1} \
+                {params.input_pe2} | \
+            sambamba view -S \
+                -f bam -F 'proper_pair and not unmapped and not mate_is_unmapped and sequence_length >= 30' \
+                /dev/stdin > {output} 
+            rm {params.input_pe1} {params.input_pe2}
+        else
+           touch {output}
+        fi
         """
 
-
 rule bwa_samse:
+    # Extract the alignment coordinates of single reads and convert alignment
+    # into BAM format filtering for reads are mapped and have a sequence length
+    # >= 30 bp
     input:
-        bam = "bam/{sample}_MT.bam",
-        sais = lambda wildcards: [f"bam/{wildcards.sample}_MT.{i}.sai" for i in range(0, 3)]
+        sais = lambda wildcards: [f"seqdata/{wildcards.sample}_MT.{i}.sai" for i in range(0, 3)],
+        pe0 = "seqdata/{sample}_0.fastq.gz"
     output:
-        temp("bam/{sample}_MT_0.bam")
+        temp("seqdata/{sample}_MT_0.bam")
     message: "Generate BAM for merged reads of sample {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
-            readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample)
+    version: "0.3"
+    params:
+        reffa = "/projects1/mitoBench/resources/NC_012920_1000.fa",
+        readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample)
     threads: 2
     shell:
         """
@@ -164,365 +258,126 @@ rule bwa_samse:
             -f /dev/stdout \
             {params.reffa} \
             {input.sais[0]} \
-            {input.bam} | \
-        samtools view -hb - > {output}
+            {input.pe0} | \
+        sambamba view -S \
+            -f bam -F 'not paired and not unmapped and sequence_length >= 30' \
+            /dev/stdin > {output}
         """
 
 rule bam_merge_wrap_sort:
     # This command merges the paired reads and single reads aligned against the
-    # MT genome, wraps the alignment to its original length of 16 569 bp,
-    # filters for a minimal read length of 30bp and a minimal mapping quality
-    # of MQ25 and sorts the output
+    # MT genome, wraps the alignment to its original length of 16 569 bp, and
+    # sorts the output; the code block using bioawk is necessary to fix the SAM
+    # ValidationError raised by HTSJDK used by damageprofiler and dedup
     input:
-        bam_12 = "bam/{sample}_MT_12.bam",
-        bam_0 = "bam/{sample}_MT_0.bam"
+        bam_12 = "seqdata/{sample}_MT_12.bam",
+        bam_0 = "seqdata/{sample}_MT_0.bam"
     output:
-        temp("bam/{sample}_MTonly.sorted.bam")
+        temp("seqdata/{sample}_MTonly.sorted.bam")
     message: "Merge, wrap and sort the aligned reads of {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: merged_bam = "bam/{sample}_MT_120.bam",
-            header = "bam/{sample}_MT_120.header",
-            reffa = f"{workflow.basedir}/resources/NC_012920.fa",
-            realigned_bam = "bam/{sample}_MT_120_realigned.bam"
-    threads: 2
+    version: "0.3"
+    params:
+        seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
+        reffa = f"/projects1/mitoBench/resources/NC_012920.fa"
+    threads: 5
     shell:
         """
-        if [ -f {params.merged_bam} ]; then
-            rm {params.merged_bam}
+        if [[ "{params.seqtype}" = "single" ]]; then
+            samtools view -bh \
+                {input.bam_0} | \
+            bam-rewrap MT:16569 | \
+            samtools view -h - | \
+            bioawk -t '{{
+                if ($2 == "0" || $2 == "16") {{gsub("16569","0",$8)}}; print
+            }}' - | \
+            samtools view -Sb - | \
+            samtools sort - | \
+            samtools calmd -Q - {params.reffa} > {output}
+        else
+            samtools merge -c \
+                - \
+                {input.bam_12} \
+                {input.bam_0} | \
+            bam-rewrap MT:16569 | \
+            samtools view -h - | \
+            bioawk -t '{{
+                if ($2 == "0" || $2 == "16") {{gsub("16569","0",$8)}}; print
+            }}' - | \
+            samtools view -Sb - | \
+            samtools sort - | \
+            samtools calmd -Q - {params.reffa} > {output}
         fi
-        samtools merge -c \
-            {params.merged_bam} \
-            {input.bam_12} \
-            {input.bam_0} 
-        java -Xms512M -Xmx1G \
-            -jar ${{CONDA_DEFAULT_ENV}}/share/circularmapper-1.93.4-1/realign-1.93.4.jar \
-            -e 1000 \
-            -r {params.reffa} \
-            -f true \
-            -x false \
-            -i {params.merged_bam}
-        samtools view -H {params.merged_bam} > {params.header}
-        cat {params.header} <( \
-            samtools view -L <(echo -e "MT\t0\t16569") -q 25 {params.realigned_bam} | \
-            bioawk -c sam '{{if (length($seq) >= 30){{print}}}}'
-        ) | \
-        samtools view -Sb - | \
-        samtools sort -o {output} -
-        rm {params.merged_bam} {params.realigned_bam} {params.header}
         """
-
 
 rule bam_rmdup:
     input:
-        "bam/{sample}_MTonly.sorted.bam"
+        "seqdata/{sample}_MTonly.sorted.bam"
     output:
-        "bam/{sample}_MTonly.sorted.rmdup.bam"
+        bam = "seqdata/{sample}_MTonly.sorted.rmdup.bam",
+        flagstat = temp("seqdata/{sample}_MTonly.sorted.rmdup.flagstat")
     message: "Remove duplicate reads from {wildcards.sample}"
-    log: "logs/dedup/{sample}_dedup.log"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: reffa = f"{workflow.basedir}/resources/NC_012920.fa"
+    version: "0.3"
+    log: "logs/dedup/{sample}_dedup.log"
     shell:
         """
-        java -Xms512M -Xmx1G \
-            -jar ${{CONDA_DEFAULT_ENV}}/share/dedup-0.12.3-1/DeDup-0.12.3.jar \
+        dedup \
             -i {input} \
             --merged \
-            -o bam
-        mv bam/{wildcards.sample}_MTonly.sorted.hist logs/dedup/{wildcards.sample}_dedup.hist
-        mv bam/{wildcards.sample}_MTonly.sorted.log {log}
-        samtools sort bam/{wildcards.sample}_MTonly.sorted_rmdup.bam | \
-        samtools calmd -b - {params.reffa} > {output}
-        samtools index {output}
-        rm bam/{wildcards.sample}_MTonly.sorted_rmdup.bam
+            -o seqdata
+        mv seqdata/{wildcards.sample}_MTonly.sorted.hist logs/dedup/{wildcards.sample}_dedup.hist
+        mv seqdata/{wildcards.sample}_MTonly.sorted.log {log}
+        samtools sort -o {output.bam} seqdata/{wildcards.sample}_MTonly.sorted_rmdup.bam
+        samtools index {output.bam}
+        rm seqdata/{wildcards.sample}_MTonly.sorted_rmdup.bam
+        samtools flagstat {output.bam} > {output.flagstat}
         """
 
-# Quality checks
-
-rule damage_profiler:
+rule flag_passedreads:
     input:
-        "bam/{sample}_MTonly.sorted.rmdup.bam"
+        "seqdata/{sample}_MTonly.sorted.rmdup.flagstat"
     output:
-        "qual/{sample}/identity_histogram.pdf"
-    message: "Generate damage profile for {wildcards.sample}"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: dir = "qual",
-            tmpdir = "qual/{sample}_MTonly.sorted.rmdup",
-            outdir = "qual/{sample}",
-            reffa = f"{workflow.basedir}/resources/NC_012920.fa"
-    shell:
-        """
-        java -Xms512M -Xmx1G \
-            -Djava.awt.headless=true \
-            -jar ${{CONDA_DEFAULT_ENV}}/share/damageprofiler-0.4.4-1/DamageProfiler-0.4.4.jar \
-            -i {input} \
-            -o {params.dir} \
-            -r {params.reffa}
-        mv {params.tmpdir}/* {params.outdir}/
-        rmdir {params.tmpdir}/
-        """
+        "results/{sample}_nReads.flag"
+    message: "Determine whether to continue with the processing: {wildcards.sample}"
+    run:
+        with open(output[0], "wt") as outfile:
+            with open(input[0], "rt") as flagstatfile:
+                nreads = int(next(flagstatfile).split(" ")[0])
+                if nreads >= 500:
+                    outfile.write("Pass\n")
+                else:
+                    outfile.write("Fail\n")
 
+################################################################################
 
-rule flagstat:
-    input:
-        "bam/{sample}_MTonly.sorted.rmdup.bam"
-    output:
-        "logs/flagstat/{sample}.flagstat"
-    message: "Determine the number of aligned reads for {wildcards.sample}"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    shell:
-        "samtools flagstat {input} > {output}"
-
-
-rule mixemt:
-    input:
-        bam = "bam/{sample}_MTonly.sorted.rmdup.bam",
-        flagstat = "logs/flagstat/{sample}.flagstat"
-    output:
-        "logs/mixemt/{sample}.mixemt.pos.tab"
-    message: "Determine mtDNA contamination for {wildcards.sample} using mixEMT"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    priority: -20
-    params: 
-            subsampling = lambda wildcards: True if float(mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat")) < 1 else False,
-            subsampling_fraction = lambda wildcards: mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat"),
-            subbam = "bam/{sample}_MTonly.sorted.rmdup.downsampled.bam",
-            mixemtprefix = "logs/mixemt/{sample}.mixemt"
-    shell:
-        """
-        if [[ -f {params.subbam} ]]; then
-            rm {params.subbam}
-        fi
-        if [[ {params.subsampling} = "True" ]]; then  # subsampling
-            samtools view -bh \
-                          -s {params.subsampling_fraction} \
-                          -o {params.subbam} \
-                          {input.bam}
-        else
-            ln -s ${{PWD}}/{input.bam} {params.subbam}
-        fi
-        samtools index {params.subbam}
-        python ${{CONDA_DEFAULT_ENV}}/bin/mixemt -v -t \
-                {params.mixemtprefix} \
-                {params.subbam} \
-                > {params.mixemtprefix}.log \
-                2> {params.mixemtprefix}.stderr || \
-        if [[ ($(wc -l < {params.mixemtprefix}.log) = "0") && ($(tail -1 {params.mixemtprefix}.stderr) = "0 contributors passed filtering steps.") ]]; then
-            echo -e "hap1\tNA\tNA\t0" > {params.mixemtprefix}.log
-            touch {params.mixemtprefix}.pos.tab
-        fi
-        rm {params.subbam}
-        """
-
-
-rule seqdepth:
-    input:
-        expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES)
-    output:
-        "logs/seqdepth.csv"
-    message: "Run samtools depth to determine the coverage across the MT genome"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: 
-        header = "chr\tpos\t{}".format("\t".join([sm for sm in SAMPLES])),
-        bams = " ".join(["bam/{}_MTonly.sorted.rmdup.bam".format(sm) for sm in SAMPLES])
-    shell:
-        """
-        echo "{params.header}" > {output}
-        samtools depth -a -r MT:1-16569 {params.bams} >> {output}
-        """
-
-rule haplogrep2:
-    input:
-        "snpAD/{sample}.snpAD.fasta"
-    output:
-        "logs/haplogrep2/{sample}.hsd"
-    message: "Determine mtDNA haplogroup for {wildcards.sample} using HaploGrep2"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    shell:
-        """
-        java -Xms256m -Xmx1G -jar {workflow.basedir}/resources/haplogrep-2.1.19.jar \
-            --in {input} \
-            --extend-report \
-            --format fasta \
-            --out {output}
-        """
-
-# Contamination estimate using contamMix
-
-rule contamMix_create_sequencePanel:
-    input:
-        "snpAD/{sample}.snpAD.fasta"
-    output:
-        "logs/contamMix/{sample}/sequence_panel.fasta"
-    message: "Align consensus sequence of {wildcards.sample} to panel of 311 modern humans"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: 
-        panel = f"{workflow.basedir}/resources/311hu+rCRS.fas"
-    shell:
-        """
-        cat {input} {params.panel} | \
-        mafft - > {output}
-        """
-
-rule contamMix_align_against_consensus:
-    input:
-        flagstat = "logs/flagstat/{sample}.flagstat",
-        fas = "snpAD/{sample}.snpAD.fasta",
-        bam = "bam/{sample}_MTonly.sorted.rmdup.bam"
-    output:
-        "logs/contamMix/{sample}/{sample}.consensus_aligned.bam"
-    message: "Align sequences of {wildcards.sample} against its consensus sequence"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    params: 
-        readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample),
-        subsampling = lambda wildcards: True if float(mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat")) < 1 else False,
-        subsampling_fraction = lambda wildcards: mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat"),
-        subbam = "logs/contamMix/{sample}/{sample}.subsampled.bam"
-    threads: 4
-    shell:
-        """
-        # Create FastA of consensus sequence with overhang and index with BWA
-        bioawk -c fastx '{{
-            print ">" $name; \
-            print $seq substr($seq,1,1000); 
-        }}' {input.fas} > logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta
-        bwa index logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta
-        # Sub-sample BAM file to 30 000 reads
-        if [[ {params.subsampling} = "True" ]]; then  # subsampling
-            samtools view -bh \
-                          -s {params.subsampling_fraction} \
-                          -o {params.subbam} \
-                          {input.bam}
-        else
-            ln -s ${{PWD}}/{input.bam} {params.subbam}
-        fi
-        # BWA aln against sample's consensus sequence
-        bwa aln \
-            -t {threads} \
-            -n 0.01 -o 2 -l 16500 \
-            -b -1 \
-            -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.1.sai \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
-            {params.subbam}
-        bwa aln \
-            -t {threads} \
-            -n 0.01 -o 2 -l 16500 \
-            -b -2 \
-            -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.2.sai \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
-            {params.subbam}
-        bwa aln \
-            -t {threads} \
-            -n 0.01 -o 2 -l 16500 \
-            -b -0 \
-            -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.0.sai \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
-            {params.subbam}
-        # BWA sampe and samse to create alignment files
-        bwa sampe \
-            -r '{params.readgroup}' \
-            -f /dev/stdout \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}.1.sai \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}.2.sai \
-            {params.subbam} \
-            {params.subbam} | \
-        samtools view -hb - > logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_12.bam
-        bwa samse \
-            -r '{params.readgroup}' \
-            -f /dev/stdout \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}.0.sai \
-            {params.subbam} | \
-        samtools view -hb - > logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_0.bam
-        # Merge sam files, re-wrap and sort
-        if [ -f logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam ]; then
-            rm logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam
-        fi
-        samtools merge -c \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_12.bam \
-            logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_0.bam 
-        echo "{wildcards.sample}" > logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta_1000_elongated
-        java -Xms512M -Xmx1G \
-            -jar ${{CONDA_DEFAULT_ENV}}/share/circularmapper-1.93.4-1/realign-1.93.4.jar \
-            -e 1000 \
-            -r logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
-            -f true \
-            -x false \
-            -i logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam
-        samtools view -H logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120_realigned.bam \
-                > logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.header
-        cat logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.header <( \
-            samtools view -L <(echo -e "{wildcards.sample}\t0\t16569") -q 25 logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120_realigned.bam | \
-            bioawk -c sam '{{if (length($seq) >= 30){{print}}}}'
-        ) | \
-        samtools view -Sb - | \
-        samtools sort -o {output} -
-        # Clean
-        rm logs/contamMix/{wildcards.sample}/{wildcards.sample}.*.sai \
-           logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT* \
-           logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta* \
-           {params.subbam}
-        """
-
-rule contamMix_estimate:
-    input:
-        aln = "logs/contamMix/{sample}/sequence_panel.fasta",
-        bam = "logs/contamMix/{sample}/{sample}.consensus_aligned.bam"
-    output:
-        "logs/contamMix/{sample}/contamMix_log.txt"
-    message: "Use contamMix to estimate contamination of sample {wildcards.sample}"
-    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
-    priority: -10
-    params: 
-        tarball = f"{workflow.basedir}/resources/contamMix_1.0-10.tar.gz",
-        contamMix_exec = f"{workflow.basedir}/resources/contamMix/exec/estimate.R"
-    threads: 3
-    shell:
-        """
-        if [[ ! -f ${{CONDA_DEFAULT_ENV}}/lib/R/etc/ldpaths ]]; then
-            cp /etc/R/ldpaths ${{CONDA_DEFAULT_ENV}}/lib/R/etc/ldpaths
-        fi
-        R -e 'if (!("contamMix" %in% installed.packages())) {{ \
-                install.packages(c("coda", "getopt"), , repos="http://cran.us.r-project.org"); \
-                install.packages("{params.tarball}", type="source")}}'
-        Rscript {params.contamMix_exec} \
-                --samFn {input.bam} \
-                --malnFn {input.aln} \
-                --tabOutput TRUE > {output}
-        """
-
-# Genotype calling mit snpAD
+#### Genotype calling mit snpAD ################################################
 
 rule bam2snpAD:
     input: 
-        "bam/{sample}_MTonly.sorted.rmdup.bam"
+        bam = "seqdata/{sample}_MTonly.sorted.rmdup.bam",
+        flag = "results/{sample}_nReads.flag"
     output:
         temp("snpAD/{sample}.snpad_input")
     message: "Convert BAM file into snpAD input format for sample {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
+    version: "0.3"
     params:
         bam2snpAD = f"{workflow.basedir}/resources/snpAD-0.3.3/Bam2snpAD",
-        reffasta = f"{workflow.basedir}/resources/NC_012920.fa"   
+        reffasta = "/projects1/mitoBench/resources//NC_012920.fa",
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """
-        {params.bam2snpAD} \
-                -Q 25 \
-                -q 30 \
-                -r MT \
-                -f {params.reffasta} \
-                {input} > {output}
+        if [[ {params.state} = "Pass" ]]; then
+            {params.bam2snpAD} \
+                    -Q 25 \
+                    -q 30 \
+                    -r MT \
+                    -f {params.reffasta} \
+                    {input.bam} > {output}
+        else
+            touch {output}
+        fi
         """
 
 rule snpAD_estimation:
@@ -533,16 +388,24 @@ rule snpAD_estimation:
         errors = temp("snpAD/{sample}.errors.txt")
     message: "Estimate the genotype likelihoods using snpAD for sample {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
+    version: "0.3"
+    log: "snpAD/{sample}.snpAD.log"
     params:
         snpAD = f"{workflow.basedir}/resources/snpAD-0.3.3/snpAD",
-    log: "snpAD/{sample}.snpAD.log"
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    threads: 4
     shell:
         """
-        {params.snpAD} \
-                -o {output.priors} \
-                -O {output.errors} \
-                {input} > {log} 2>&1
+        if [[ {params.state} = "Pass" ]]; then
+            {params.snpAD} \
+                    --cpus={threads} \
+                    -o {output.priors} \
+                    -O {output.errors} \
+                    {input} > {log} 2>&1
+        else
+            touch {output.priors}
+            touch {output.errors}
+        fi
         """
 
 rule snpAD_call:
@@ -554,15 +417,20 @@ rule snpAD_call:
         "snpAD/{sample}.snpAD.vcf"
     message: "Call the genotypes using snpAD for sample {wildcards.sample} fixing the likelihood of a heterozygous genotype to a very small number"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
+    version: "0.3"
     params:
         snpADcall = f"{workflow.basedir}/resources/snpAD-0.3.3/snpADCall",
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """
-        {params.snpADcall} \
-                -e <(bioawk -t '$4 < 1e6{{print $1, $2, $3, $4}}' {input.errors}) \
-                -p $(cat {input.priors} |perl -F',' -lane 'for ($i=0 ; $i<4 ; $i++) {{ $F[$i]=$F[$i]/($F[0]+$F[1]+$F[2]+$F[3]); }} for ($i=4; $i<@F; $i++) {{ $F[$i] = "1e-320" ; }} print join ",",@F;') \
-                {input.snpAD} > {output}
+        if [[ {params.state} = "Pass" ]]; then
+            {params.snpADcall} \
+                    -e <(bioawk -t '$4 < 1e6{{print $1, $2, $3, $4}}' {input.errors}) \
+                    -p $(cat {input.priors} |perl -F',' -lane 'for ($i=0 ; $i<4 ; $i++) {{ $F[$i]=$F[$i]/($F[0]+$F[1]+$F[2]+$F[3]); }} for ($i=4; $i<@F; $i++) {{ $F[$i] = "1e-320" ; }} print join ",",@F;') \
+                    {input.snpAD} > {output}
+        else
+            touch {output}
+        fi
         """
 
 rule snpAD_vcf2fa:
@@ -573,215 +441,488 @@ rule snpAD_vcf2fa:
         tbi = "snpAD/{sample}.snpAD.vcf.gz.tbi"
     message: "Convert snpAD VCF file into a FastA file for sample {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
-    version: "0.2.2"
+    version: "0.3"
     params:
         vcf2fa = f"{workflow.basedir}/resources/snpAD-0.3.3/vcf2fasta.pl",
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """
-        {params.vcf2fa} < {input} | \
-        sed 's/>MT/>{wildcards.sample}/' > {output.fa}
-        bgzip -f {input}
-        tabix -f {input}.gz
+        if [[ {params.state} = "Pass" ]]; then
+            {params.vcf2fa} < {input} | \
+            sed 's/>MT/>{wildcards.sample}/' > {output.fa}
+            bgzip -f {input}
+            tabix -f {input}.gz
+        else
+            touch {output.fa}
+            touch {output.tbi}
+        fi
         """
 
-# Summary
+################################################################################
+
+#### Down-sample BAM file ######################################################
+# Down-sample BAM file for contamMix, mixEMT, and damageprofiler in order to
+# not waste a lot of time and resources on deeply sequenced samples
+
+rule namesort_norewrap:
+    # Sort by name to be able to revert bam-rewrap's introduction of duplicated
+    # reads
+    input:
+        bam = "seqdata/{sample}_MTonly.sorted.bam",
+        flag = "results/{sample}_nReads.flag"
+    output:
+        temp("seqdata/{sample}_MTonly.nsorted.bam")
+    message: "Sort BAM file by name: {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params:
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            samtools sort -l 0 -n -o {output} {input.bam}
+        else
+            touch {output}
+        fi
+        """
+
+rule revert_bamrewrap:
+    # Revert bam-wrap
+    input:
+        "seqdata/{sample}_MTonly.nsorted.bam"
+    output:
+        temp("seqdata/{sample}_MTonly.nsorted.norerwap.bam")
+    message: "Revert bam-wrap by removing multiple occurrences of reads for {wildcards.sample}"
+    version: "0.3"
+    params:
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    run:
+        if params.state == "Pass":
+            bamfile = pysam.AlignmentFile(input[0])
+
+            reads = []
+            prevread = ""
+            with pysam.AlignmentFile(output[0], "wb", template=bamfile) as outfile:
+                for i, read in enumerate(bamfile):
+                    if not read.is_unmapped and not read.mate_is_unmapped:
+                        if read.query_name != prevread and prevread != "":
+                            if ((reads[0].is_paired and len(reads) > 2) or
+                                (not reads[0].is_paired and len(reads) > 1)):  # one duplicated read
+                                read_orient = [r.is_read1 for r in reads]
+                                if sum(read_orient) > 1:  # forward read got duplicated
+                                    del reads[1]
+                                else:  # reverse read got duplicated
+                                    if len(reads) > 2:  # for paired reads
+                                        del reads[2]
+                                    else:  # for single reads
+                                        del reads[1]
+                            for r in reads:
+                                outfile.write(r)
+                            reads = []
+                        reads.append(read)
+                        prevread = read.query_name
+        else:
+            with open(output[0], "wt") as outfile:
+                pass
+
+rule sort_norewrap:
+    # Sort the BAM file after reverting bam-wrap by position 
+    input:
+        "seqdata/{sample}_MTonly.nsorted.norerwap.bam"
+    output:
+        temp("seqdata/{sample}_MTonly.sorted.norerwap.bam")
+    message: "Sort the BAM file after reverting bam-wrap by position: {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params:
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            samtools sort -o {output} {input}
+        else
+            touch {output}
+        fi
+        """
+
+rule flagstat:
+    # Determine number of aligned reads for sub-sampling
+    input:
+        "seqdata/{sample}_MTonly.sorted.norerwap.bam"
+    output:
+        "logs/flagstat/{sample}.flagstat"
+    message: "Determine the number of aligned reads for {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params:
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            samtools flagstat {input} > {output}
+        else
+            touch {output}
+        fi
+        """
+
+################################################################################
+
+#### General stats #############################################################
+
+rule subsample_damageprofiler:
+    # Sub-sample BAM file to at most 50,000 aligned reads in order to avoid
+    # waiting wasting time and resources
+    input:
+        bam = "seqdata/{sample}_MTonly.sorted.rmdup.bam",
+        flagstat = "logs/flagstat/{sample}.flagstat",
+        flag = "results/{sample}_nReads.flag"
+    output:
+        temp("seqdata/{sample}_MTonly.sorted.rmdup.subsampled.bam")
+    message: "Subsample MT aligned reads to 50,000 reads for sample: {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params:
+        subsampling_fraction = lambda wildcards: mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat", targetreads=50000),
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            samtools view -bh \
+                        -s {params.subsampling_fraction} \
+                        -o {output} \
+                        {input.bam}
+        else
+            touch {output}
+        fi
+        """
+
+rule damage_profiler:
+    input:
+        "seqdata/{sample}_MTonly.sorted.rmdup.subsampled.bam"
+    output:
+        "qual/{sample}/identity_histogram.pdf"
+    message: "Generate damage profile for {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params: 
+        dir = "qual",
+        tmpdir = "qual/{sample}_MTonly.sorted.rmdup.subsampled",
+        outdir = "qual/{sample}",
+        reffa = f"{workflow.basedir}/resources/NC_012920.fa",
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            damageprofiler \
+                -i {input} \
+                -o {params.dir} \
+                -r {params.reffa}
+            mv {params.tmpdir}/* {params.outdir}/
+            rmdir {params.tmpdir}/
+        else
+            touch {output}
+        fi
+        """
+
+rule seqdepth:
+    input:
+        "seqdata/{sample}_MTonly.sorted.rmdup.bam"
+    output:
+        "logs/seqdepth/{sample}.seqdepth.csv"
+    message: "Run samtools depth to determine the coverage across the MT genome: {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params: 
+        header = lambda wildcards: f"chr\tpos\t{wildcards.sample}"
+    shell:
+        """
+        echo "{params.header}" > {output}
+        samtools depth -a -r MT {input} >> {output}
+        """
+
+rule haplogrep2:
+    input:
+        fa = "snpAD/{sample}.snpAD.fasta",
+        flag = "results/{sample}_nReads.flag"
+    output:
+        "logs/haplogrep2/{sample}.hsd"
+    message: "Determine mtDNA haplogroup for {wildcards.sample} using HaploGrep2"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params:
+        haplogrep = f"{workflow.basedir}/resources/haplogrep",
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+             {params.haplogrep} classify \
+                --in {input.fa} \
+                --extend-report \
+                --format fasta \
+                --hits 5 \
+                --out {output}
+        else
+            touch {output}
+        fi
+        """
+
+################################################################################
+
+#### Contamination estimate using mixEMT #######################################
+
+rule mixemt:
+    input:
+        bam = "seqdata/{sample}_MTonly.sorted.norerwap.bam",
+        flagstat = "logs/flagstat/{sample}.flagstat",
+        flag = "results/{sample}_nReads.flag"
+    output:
+        "logs/mixemt/{sample}.mixemt.log"
+    message: "Determine mtDNA contamination for {wildcards.sample} using mixEMT"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    priority: -100
+    resources: mixemt = 1
+    params: 
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag"),
+        subsampling = lambda wildcards: True if float(mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat")) < 1 else False,
+        subsampling_fraction = lambda wildcards: mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat"),
+        subbam = "seqdata/{sample}_MTonly.sorted.rmdup.downsampled.bam",
+        mixemtprefix = "logs/mixemt/{sample}.mixemt"
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            if [[ -f {params.subbam} ]]; then
+                rm {params.subbam}
+            fi
+            if [[ {params.subsampling} = "True" ]]; then  # subsampling
+                samtools view -bh \
+                    -s {params.subsampling_fraction} \
+                    -o {params.subbam} \
+                    {input.bam}
+            else
+                ln -s ${{PWD}}/{input.bam} {params.subbam}
+            fi
+            samtools index {params.subbam}
+            mixemt -q 25 -v -t \
+                {params.mixemtprefix} \
+                {params.subbam} \
+                > {output} \
+                2> {params.mixemtprefix}.stderr || \
+            if [[ ($(wc -l < {params.mixemtprefix}.log) = "0") && ($(tail -1 {params.mixemtprefix}.stderr) = "0 contributors passed filtering steps.") ]]; then
+                echo -e "hap1\tNA\tNA\t0" > {params.mixemtprefix}.log
+            else
+            rm {params.subbam}* {params.mixemtprefix}.*.tab
+            fi
+        else
+            echo -e "hap1\tNA\tNA\t0" > {params.mixemtprefix}.log
+        fi
+        """
+################################################################################
+
+#### Contamination estimate using contamMix ####################################
+
+rule contamMix_create_sequencePanel:
+    input:
+        fa = "snpAD/{sample}.snpAD.fasta",
+        flag = "results/{sample}_nReads.flag"
+    output:
+        "logs/contamMix/{sample}/sequence_panel.fasta"
+    message: "Align consensus sequence of {wildcards.sample} to panel of 311 modern humans"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    resources: local_jobs = 1
+    params: 
+        panel = f"{workflow.basedir}/resources/311hu+rCRS.fas",
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            cat {input.fa} {params.panel} | \
+            mafft - > {output}
+        else
+            touch {output}
+        fi
+        """
+
+rule contamMix_align_against_consensus:
+    input:
+        flagstat = "logs/flagstat/{sample}.flagstat",
+        bam = "seqdata/{sample}_MTonly.sorted.norerwap.bam",
+        fas = "snpAD/{sample}.snpAD.fasta",
+        flag = "results/{sample}_nReads.flag"
+    output:
+        "logs/contamMix/{sample}/{sample}.consensus_aligned.bam"
+    message: "Align sequences of {wildcards.sample} against its consensus sequence"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params: 
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag"),
+        readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample),
+        subsampling = lambda wildcards: True if float(mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat")) < 1 else False,
+        subsampling_fraction = lambda wildcards: mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat")
+    threads: 4
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            # Create FastA of consensus sequence with overhang and index with BWA
+            bioawk -c fastx '{{
+                print ">" $name; \
+                print $seq substr($seq,1,1000); 
+            }}' {input.fas} > logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta
+            bwa index logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta
+            # Sub-sample BAM file to 30 000 reads
+            if [[ {params.subsampling} = "True" ]]; then  # subsampling
+                samtools view -bh \
+                     -s {params.subsampling_fraction} \
+                     {input.bam} | \
+                samtools sort -n - | \
+                samtools fastq \
+                    -1 logs/contamMix/{wildcards.sample}/{wildcards.sample}_1.fastq.gz \
+                    -2 logs/contamMix/{wildcards.sample}/{wildcards.sample}_2.fastq.gz \
+                    -0 logs/contamMix/{wildcards.sample}/{wildcards.sample}_0.fastq.gz \
+                    -
+            else
+                samtools sort -n {input.bam} | \
+                samtools fastq \
+                    -1 logs/contamMix/{wildcards.sample}/{wildcards.sample}_1.fastq.gz \
+                    -2 logs/contamMix/{wildcards.sample}/{wildcards.sample}_2.fastq.gz \
+                    -0 logs/contamMix/{wildcards.sample}/{wildcards.sample}_0.fastq.gz \
+                    -
+            fi
+            # BWA aln against sample's consensus sequence
+            bwa aln \
+                -t {threads} \
+                -n 0.01 -o 2 -l 16500 \
+                -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.1.sai \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_1.fastq.gz
+            bwa aln \
+                -t {threads} \
+                -n 0.01 -o 2 -l 16500 \
+                -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.2.sai \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_2.fastq.gz
+            bwa aln \
+                -t {threads} \
+                -n 0.01 -o 2 -l 16500 \
+                -f logs/contamMix/{wildcards.sample}/{wildcards.sample}.0.sai \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_0.fastq.gz
+            # BWA sampe and samse to create alignment files
+            bwa sampe \
+                -r '{params.readgroup}' \
+                -f logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_12.bam \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}.1.sai \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}.2.sai \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_1.fastq.gz \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_2.fastq.gz
+            bwa samse \
+                -r '{params.readgroup}' \
+                -f logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_0.bam \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}.0.sai \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_0.fastq.gz
+            # Merge sam files, re-wrap and sort
+            if [ -f logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam ]; then
+                rm logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_120.bam
+            fi
+            samtools merge -c \
+                - \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_12.bam \
+                logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT_0.bam | \
+            bam-rewrap '{wildcards.sample}:16569' | \
+            samtools view -bhq 25 - | \
+            samtools sort - | \
+            samtools calmd -Q - logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta > {output}
+            # Clean
+            rm logs/contamMix/{wildcards.sample}/{wildcards.sample}.*.sai \
+               logs/contamMix/{wildcards.sample}/{wildcards.sample}_MT* \
+               logs/contamMix/{wildcards.sample}/{wildcards.sample}.fasta* \
+               logs/contamMix/{wildcards.sample}/{wildcards.sample}_{{0,1,2}}.fastq.gz
+        else
+            touch {output}
+        fi
+        """
+
+rule contamMix_estimate:
+    input:
+        aln = "logs/contamMix/{sample}/sequence_panel.fasta",
+        bam = "logs/contamMix/{sample}/{sample}.consensus_aligned.bam"
+    output:
+        "logs/contamMix/{sample}/contamMix_log.txt"
+    message: "Use contamMix to estimate contamination of sample {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    priority: -50
+    resources: contamMix = 1
+    params:
+        estimateR = f"{workflow.basedir}/resources/contamMix/exec/estimate.R",
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+    threads: 36
+    shell:
+        """
+        if [[ {params.state} = "Pass" ]]; then
+            Rscript {params.estimateR} \
+                    --samFn {input.bam} \
+                    --malnFn {input.aln} \
+                    --nIter 15000 \
+                    --tabOutput TRUE > {output}
+        else
+            touch {output}
+        fi
+        """
+
+################################################################################
+
+#### Summary ###################################################################
 
 rule summary:
-    input: expand("bam/{sample}_MTonly.sorted.rmdup.bam", sample=SAMPLES),
-           expand("qual/{sample}/identity_histogram.pdf", sample=SAMPLES),
-           expand("logs/mixemt/{sample}.mixemt.pos.tab", sample=SAMPLES),
-           expand("logs/contamMix/{sample}/contamMix_log.txt", sample=SAMPLES),
-           "logs/seqdepth.csv",
-           expand("logs/haplogrep2/{sample}.hsd", sample=SAMPLES),
-           expand("snpAD/{sample}.snpAD.fasta", sample=SAMPLES)
-    output: "{projdir}/summary_table.csv"
-    message: "Summarise the results in a table"
-    version: "0.2.2"
-    run:
-        R("""
-          # Install packages if not available
-          packages <- c("ape", "data.table", "tidyverse")
-          missing_packages <- packages[!(packages %in% installed.packages())]
-          if (length(missing_packages) > 0) {{
-              install.packages(missing_packages,
-                               repos = "http://cran.us.r-project.org")
-          }}
-          
-          # Load libaries
-          library(ape)
-          library(data.table)
-          library(tidyverse)
-          
-          # Start summary
-          ## number of reads
-          flagstat_fns <- list.files("logs/flagstat",
-                                     pattern = "\\\.flagstat",
-                                     full.names = T)
-          nreads_MT <- map_df(flagstat_fns, function(fn) {{
-                              tibble(sample = str_replace(basename(fn), "\\\.flagstat", ""),
-                                     nReads = as.numeric(unlist(str_split(readLines(fn)[1], " "))[1]))
-                              }})
-          ## coverage
-          seqdepth <- fread("logs/seqdepth.csv") %>%
-                      gather("sample", "cov", 3:ncol(.)) %>%
-                      group_by(sample) %>%
-                      summarise(meanCov = mean(cov),
-                                medianCov = median(cov),
-                                minCov = min(cov),
-                                maxCov = max(cov),
-                                sdCov = sd(cov),
-                                cov_gt_5x = sum(cov >= 5))
-          
-          ## read length
-          mode_of_readlength <- function(rl) {{
-              rl %>%
-              filter(n == max(n)) %>%
-              arrange(desc(sumRL)) %>%
-              pull(Length) %>%
-              .[1]
-          }}
-          readlength <- map_df(seqdepth$sample, function(s) {{
-                               readlength_dist <- fread(paste("qual", s, "lgdistribution.txt", sep="/")) %>%
-                                                  group_by(Length) %>%
-                                                  summarise(n = sum(Occurrences)) %>%
-                                                  mutate(sumRL = Length * n)
-                               tibble(sample = s,
-                                      meanReadLength = sum(readlength_dist$sumRL) / sum(readlength_dist$n),
-                                      modeReadLength = mode_of_readlength(readlength_dist))
-                               }})
-          
-          ## contamination
-          ### mixEMT
-          mixemt_fns <- list.files("logs/mixemt",
-                                   pattern = "\\\.mixemt\\\.log", full.names = T)
-          mixemt <- map_df(mixemt_fns, function(fn) {{
-                           fread(fn, header = F,
-                                 col.names = c("comp", "hg", "contr", "noReads")) %>%
-                           mutate(sample = str_replace(basename(fn), "\\\.mixemt\\\.log", ""),
-                                  contr = paste0(contr * 100, "%"),
-                                  label = paste0(hg, " (", contr, ",", noReads, ")")) %>%
-                           group_by(sample) %>%
-                           summarise(mixEMT = str_replace_all(toString(label), ", ", ";"))
-                           }})
-          ### contamMix
-          contamMix <- map_df(seqdepth$sample, function(s) {{
-                              fread(paste("logs/contamMix", s, "contamMix_log.txt", sep="/"),
-                                    select = 1:4,
-                                    col.names = c("error", "propAuth",
-                                                  "propAuth_lowerQuantile",
-                                                  "propAuth_upperQuantile")) %>%
-                              mutate(sample = s,
-                                     label = paste0(round((1 - propAuth) * 100, 2), "% (",
-                                                    round((1 - propAuth_upperQuantile) * 100, 2), "-",
-                                                    round((1 - propAuth_lowerQuantile) * 100, 2), "%)"),
-                                     flagContamination = 1 - propAuth >= 0.1) %>%
-                              select(sample, proportionContamination = label, flagContamination)
-                              }})
-          
-          ## Consensus sequence
-          fas_snpAD_fns <- list.files("snpAD",
-                                      pattern = "\\\.snpAD\\\.fasta", full.names = T)
-          fas_snpAD <- lapply(fas_snpAD_fns, function(fn) read.dna(fn, "fasta", as.character = T))
-          ### Compare consensus sequences
-          consensus_comparison <- map_df(seq(1, length(fas_snpAD)), function(i) {{
-                                          tibble(sample = str_replace(basename(fas_snpAD_fns[i]),
-                                                                      "\\\.snpAD\\\.fasta", ""),
-                                                 noNs = sum(fas_snpAD[[i]] == "n"),
-                                                 percentNs = round(noNs * 100 / 16569, 1),
-                                                 flagMissingness = percentNs > 1)
-                                        }})
-          
-          ## Haplogroup assignment
-          count_no_polys <- function(s) {{
-            # Count the number of polymorphisms that are not caused by missing data
-            if (is.na(s)) {{
-              rawstring <- unlist(str_split(s, " "))
-              fltstring <- rawstring[!str_detect(rawstring, "N$")]
-              return(length(fltstring))
-            }} else return(0)
-          }}
-
-          hsd_fns <- list.files("logs/haplogrep2",
-                                pattern = "\\\.hsd", full.names = T)
-          haplogrep <- map_df(hsd_fns, function(fn) {{
-                           fread(fn,
-                                 colClasses = list("character"=c("SampleID"))) %>%
-                           mutate(noNotFoundPolys = count_no_polys(Not_Found_Polys),
-                                  noRemainingPolys = count_no_polys(Remaining_Polys)) %>%
-                           select(sample = SampleID,
-                                  haplogroup = Haplogroup,
-                                  hgQ = Quality,
-                                  noNotFoundPolys, noRemainingPolys)
-                              }})
-                    
-          # Merge summary 
-          summary_table <- nreads_MT %>%
-                           rename(`number of reads` = nReads) %>%
-                           left_join(seqdepth, by = "sample") %>%
-                           select(-medianCov) %>%
-                           mutate(meanCov = round(meanCov, 1),
-                                  sdCov = round(sdCov, 0)) %>%
-                           rename(`mean coverage` = meanCov,
-                                  `std coverage` = sdCov,
-                                  `sites >= 5-fold coverage` = cov_gt_5x,
-                                  `minimum coverage` = minCov,
-                                  `maximum coverage` = maxCov) %>%
-                           left_join(readlength, by = "sample") %>%
-                           select(-meanReadLength) %>%
-                           rename(`mode of read length` = modeReadLength) %>%
-                           left_join(consensus_comparison, by = "sample") %>%
-                           select(-noNs) %>%
-                           rename(`% of Ns in snpAD consensus sequence` = percentNs,
-                                  `flagged due to number of missing bases (> 1%)` = flagMissingness) %>%
-                           left_join(haplogrep, by = "sample") %>%
-                           rename(`haplogroup` = haplogroup,
-                                  `haplogroup quality` = hgQ,
-                                  `no. of not-found polys` = noNotFoundPolys,
-                                  `no. of remaining polys` = noRemainingPolys) %>%
-                           left_join(contamMix, by = "sample") %>%
-                           rename(`proportion of contamination DNA (contamMix)` = proportionContamination,
-                                  `flagged due to contamination (> 10%)` = flagContamination) %>%
-                           left_join(mixemt, by = "sample") %>%
-                           rename(`haplogroup contributions (mixEMT)` = mixEMT) %>%
-                           mutate(quality = ifelse(`flagged due to number of missing bases (> 1%)` | `flagged due to contamination (> 10%)`,
-                                                   "low", "high"))
-          fwrite(summary_table,
-                 sep = "\t",
-                 file = "{output}")
-        """)
+    input: 
+        flagstat = "logs/flagstat/{sample}.flagstat",
+        seqdepth = "logs/seqdepth/{sample}.seqdepth.csv",
+        damageprofiler = "qual/{sample}/identity_histogram.pdf",
+        mixemt = "logs/mixemt/{sample}.mixemt.log",
+        contammix = "logs/contamMix/{sample}/contamMix_log.txt",
+        snpAD = "snpAD/{sample}.snpAD.fasta",
+        haplogrep = "logs/haplogrep2/{sample}.hsd"
+    output: "{projdir}/{sample}/summary_table.csv"
+    message: "Summarise the results in a table: {wildcards.sample}"
+    conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
+    version: "0.3"
+    params:
+        readlengthdist = "qual/{sample}/lgdistribution.txt"
+    script:
+        "scripts/summarise_sample.R"
 
 rule copy_tmp_to_proj:
-    input: expand("{projdir}/summary_table.csv", projdir=[PROJDIR])
-    output: expand("{projdir}/fasta/{sample}.fa", projdir=[PROJDIR], sample=SAMPLES)
-    message: "Copy results from tmp to project folder"
-    version: "0.2.2"
+    input:
+        "{projdir}/{sample}/summary_table.csv"
+    output:
+        "{projdir}/{sample}/{sample}.fa"
+    message: "Copy results from tmp to project folder: {wildcards.sample}"
+    version: "0.3"
     shell:
         """
-        mkdir -p {PROJDIR}/sample_stats
-        for sm in {SAMPLES}; do
-            echo ${{sm}}
-            # Create per-sample folder
-            mkdir -p {PROJDIR}/sample_stats/${{sm}}
-            # Copy non-clipped BAM file
-            cp -r bam/${{sm}}_MTonly.sorted.rmdup.bam* {PROJDIR}/sample_stats/${{sm}}/
-            # DeDup logs
-            cp -r logs/dedup/${{sm}}_dedup.* {PROJDIR}/sample_stats/${{sm}}/
-            # HaploGrep
-            cp logs/haplogrep2/${{sm}}.hsd {PROJDIR}/sample_stats/${{sm}}/
-            # MixEMT
-            cp logs/mixemt/${{sm}}.* {PROJDIR}/sample_stats/${{sm}}/
-            # DamageProfiler
-            cp qual/${{sm}}/3pGtoA_freq.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_3pGtoA_freq.txt
-            cp qual/${{sm}}/5pCtoT_freq.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_5pCtoT_freq.txt
-            cp qual/${{sm}}/DamagePlot.pdf {PROJDIR}/sample_stats/${{sm}}/${{sm}}_DamagePlot.pdf
-            cp qual/${{sm}}/Length_plot.pdf {PROJDIR}/sample_stats/${{sm}}/${{sm}}_Length_plot.pdf
-            cp qual/${{sm}}/lgdistribution.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_lgdistribution.txt
-            cp qual/${{sm}}/misincorporation.txt {PROJDIR}/sample_stats/${{sm}}/${{sm}}_misincorporation.txt
-            # snpAD
-            cp snpAD/${{sm}}.snpAD.vcf.gz* {PROJDIR}/sample_stats/${{sm}}/
-            cp snpAD/${{sm}}.snpAD.fasta {PROJDIR}/fasta/${{sm}}.fa
-        done
-        cp logs/seqdepth.csv {PROJDIR}/sample_stats/
+        mkdir -p {PROJDIR}/{wildcards.sample}
+        # Copy non-clipped BAM file
+        cp -r seqdata/{wildcards.sample}_MTonly.sorted.rmdup.bam* {PROJDIR}/{wildcards.sample}/
+        # DeDup logs
+        cp -r logs/dedup/{wildcards.sample}_dedup.* {PROJDIR}/{wildcards.sample}/
+        # HaploGrep
+        cp logs/haplogrep2/{wildcards.sample}.hsd {PROJDIR}/{wildcards.sample}/
+        # MixEMT
+        cp logs/mixemt/{wildcards.sample}.* {PROJDIR}/{wildcards.sample}/
+        # DamageProfiler
+        cp qual/{wildcards.sample}/3pGtoA_freq.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_3pGtoA_freq.txt
+        cp qual/{wildcards.sample}/5pCtoT_freq.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_5pCtoT_freq.txt
+        cp qual/{wildcards.sample}/DamagePlot.pdf {PROJDIR}/{wildcards.sample}/{wildcards.sample}_DamagePlot.pdf
+        cp qual/{wildcards.sample}/Length_plot.pdf {PROJDIR}/{wildcards.sample}/{wildcards.sample}_Length_plot.pdf
+        cp qual/{wildcards.sample}/lgdistribution.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_lgdistribution.txt
+        cp qual/{wildcards.sample}/misincorporation.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_misincorporation.txt
+        # snpAD
+        cp snpAD/{wildcards.sample}.snpAD.vcf.gz* {PROJDIR}/{wildcards.sample}/
+        cp snpAD/{wildcards.sample}.snpAD.fasta {PROJDIR}/{wildcards.sample}/{wildcards.sample}.fa
         """
 
 # Clean temporary output

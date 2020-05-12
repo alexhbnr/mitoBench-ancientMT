@@ -1,129 +1,136 @@
 {
     "__default__" :
     {
-        "partition" : "medium",
-        "mem"       : "8K",
-        "time"      : "2-00:00",
+        "partition" : "short",
+        "mem"       : "8000",
+        "time"      : "0-02:00",
         "out"       : "cluster_logs/slurm.%j.out",
         "err"       : "cluster_logs/slurm.%j.err"
     },
 
-    "extract_MT_reads" :
+    "prepare_fastq" :
     {
-        "mem"       : "2K",
+        "mem"       : "4000",
         "partition" : "short",
         "time"      : "0-02:00",
     },
 
+    "adapterremoval" :
+    {
+        "mem"       : "8000",
+        "partition" : "medium",
+        "time"      : "2-00:00",
+    },
+
     "bwa_aln" :
     {
-        "mem"       : "4K",
+        "mem"       : "4000",
         "partition" : "short",
         "time"      : "0-02:00"
     },
 
     "bwa_sampe" :
     {
-        "mem"       : "4K",
+        "mem"       : "4000",
         "partition" : "short",
         "time"      : "0-02:00"
     },
 
     "bwa_samse" :
     {
-        "mem"       : "4K",
+        "mem"       : "4000",
         "partition" : "short",
         "time"      : "0-02:00"
-    },
-
-    "bam_merge_wrap_sort" :
-    {
-        "mem"       : "8K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-    "bam_rmdup" :
-    {
-        "mem"       : "8K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-    "damage_profiler" :
-    {
-        "mem"       : "8K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-    "flagstat" :
-    {
-        "mem"       : "2K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-    "mixemt" :
-    {
-        "mem"       : "12K",
-        "partition" : "medium",
-        "time"      : "1-00:00"
-    },
-
-    "haplogrep2" :
-    {
-        "mem"       : "10K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-    "contamMix_create_sequencePanel" :
-    {
-        "mem"       : "4K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-    "contamMix_align_against_consensus" :
-    {
-        "mem"       : "6K",
-        "partition" : "short",
-        "time"      : "0-02:00"
-    },
-
-    "contamMix_estimate" :
-    {
-        "mem"       : "4K",
-        "partition" : "medium",
-        "time"      : "1-00:00"
     },
 
     "bam2snpAD" :
     {
-        "mem"       : "4K",
+        "mem"       : "4000",
         "partition" : "short",
         "time"      : "0-02:00"
     },
 
     "snpAD_estimation" :
     {
-        "mem"       : "4K",
+        "mem"       : "4000",
         "partition" : "short",
         "time"      : "0-02:00"
     },
 
     "snpAD_call" :
     {
-        "mem"       : "4K",
+        "mem"       : "4000",
         "partition" : "short",
         "time"      : "0-02:00"
     },
 
     "snpAD_vcf2fa" :
     {
-        "mem"       : "2K",
+        "mem"       : "2000",
         "partition" : "short",
         "time"      : "0-02:00"
+    },
+
+    "namesort_norewrap" :
+    {
+        "mem"       : "4000",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "revert_bamrewrap" :
+    {
+        "mem"       : "4000",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "sort_norewrap" :
+    {
+        "mem"       : "4000",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "flagstat" :
+    {
+        "mem"       : "2000",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "subsample_damageprofiler" :
+    {
+        "mem"       : "4000",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "mixemt" :
+    {
+        "mem"       : "12000",
+        "partition" : "medium",
+        "time"      : "1-00:00"
+    },
+
+    "contamMix_create_sequencePanel" :
+    {
+        "mem"       : "4000",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "contamMix_align_against_consensus" :
+    {
+        "mem"       : "6000",
+        "partition" : "short",
+        "time"      : "0-02:00"
+    },
+
+    "contamMix_estimate" :
+    {
+        "mem"       : "4000",
+        "partition" : "medium",
+        "time"      : "1-00:00"
     }
 }

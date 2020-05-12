@@ -62,7 +62,7 @@ def mixemt_downsampling(flagstatfn, targetreads=config['targetreads']):
 wildcard_constraints:
     sample = config['sampleIDconstraint']
 
-localrules: seqdepth, contamMix_align_against_consensus, summary, copy_tmp_to_proj
+localrules: determine_sequencing_type, flag_passedreads, seqdepth, contamMix_align_against_consensus, summary, copy_tmp_to_proj
 
 rule all:
     input:

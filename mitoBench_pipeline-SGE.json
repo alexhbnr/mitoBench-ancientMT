@@ -1,17 +1,17 @@
 {
     "__default__" :
     {
-        "vfree"  : "6G",
-        "hvmem"  : "6G",
+        "vfree"  : "8G",
+        "hvmem"  : "8G",
         "class"  : "*",
         "out"    : "cluster_logs/\\$JOB_NAME.\\$JOB_ID.o",
         "err"    : "cluster_logs/\\$JOB_NAME.\\$JOB_ID.e"
     },
 
-    "extract_MT_reads" :
+    "prepare_fastq" :
     {
-        "vfree"  : "2G",
-        "hvmem"  : "2G"
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
     },
 
     "bwa_aln" :
@@ -30,64 +30,6 @@
     {
         "vfree"  : "4G",
         "hvmem"  : "4G"
-    },
-
-    "bam_merge_wrap_sort" :
-    {
-        "vfree"  : "8G",
-        "hvmem"  : "8G"
-    },
-
-    "bam_rmdup" :
-    {
-        "vfree"  : "8G",
-        "hvmem"  : "8G"
-    },
-
-    "damage_profiler" :
-    {
-        "vfree"  : "8G",
-        "hvmem"  : "8G"
-    },
-
-    "flagstat" :
-    {
-        "vfree"  : "2G",
-        "hvmem"  : "2G"
-    },
-
-    "mixemt" :
-    {
-        "vfree"  : "12G",
-        "hvmem"  : "12G",
-        "class"  : "default"
-    },
-
-    "haplogrep2" :
-    {
-        "vfree"  : "10G",
-        "hvmem"  : "10G",
-        "class"  : "default"
-
-    },
-
-    "contamMix_create_sequencePanel" :
-    {
-        "vfree"  : "4G",
-        "hvmem"  : "4G"
-    },
-
-    "contamMix_align_against_consensus" :
-    {
-        "vfree"  : "6G",
-        "hvmem"  : "6G"
-    },
-
-    "contamMix_estimate" :
-    {
-        "vfree"  : "4G",
-        "hvmem"  : "4G",
-        "class"  : "default"
     },
 
     "bam2snpAD" :
@@ -112,6 +54,61 @@
     {
         "vfree"  : "2G",
         "hvmem"  : "2G"
-    }
+    },
 
+    "namesort_norewrap" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "revert_bamrewrap" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "sort_norewrap" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "flagstat" :
+    {
+        "vfree"  : "2G",
+        "hvmem"  : "2G"
+    },
+
+    "subsample_damageprofiler" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "mixemt" :
+    {
+        "vfree"  : "12G",
+        "hvmem"  : "12G",
+        "class"  : "default"
+    },
+
+    "contamMix_create_sequencePanel" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G"
+    },
+
+    "contamMix_align_against_consensus" :
+    {
+        "vfree"  : "6G",
+        "hvmem"  : "6G"
+    },
+
+    "contamMix_estimate" :
+    {
+        "vfree"  : "4G",
+        "hvmem"  : "4G",
+        "class"  : "default"
+    }
 }

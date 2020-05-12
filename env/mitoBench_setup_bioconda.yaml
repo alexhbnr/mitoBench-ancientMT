@@ -1,7 +1,0 @@
-name: mitoBench-ancientMT
-channels:
-  - bioconda
-dependencies:
-  - samtools = 1.9
-  - bwa = 0.7.17
-  - bioawk = 1.0

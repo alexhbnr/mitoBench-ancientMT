@@ -1,23 +1,24 @@
 name: mitoBench-ancientMT
 channels:
+  - conda-forge
   - bioconda
+  - defaults
 dependencies:
-  - samtools = 1.9
-  - bwa = 0.7.17
-  - bioawk = 1.0
-  - circularmapper = 1.93.4
-  - dedup = 0.12.3 
-  - damageprofiler = 0.4.4
-  - bamutil = 1.0.14
-  - angsd = 0.923
-  - mafft
-  - r = 3.5.1
-  - python = 2.7.15
+  - python=3.7
+  - pip>=20.0
+  - adapterremoval>=2.3.1
+  - bwa>=0.7.17
+  - sambamba>=0.7.1
+  - samtools>=1.9
+  - bioawk>=1.0
+  - dedup>=0.12.3 
+  - damageprofiler>=0.4.9
+  - mafft>=7.4
+  - r=3.6
+  - pandas>=1.0.0
+  - numpy>=1.18
+  - scipy>=1.4
+  - biopython>=1.76
+  - pysam>=0.15.4
   - pip:
-    - git+https://github.com/benjaminp/six
-    - pandas==0.24
-    - numpy==1.16.2
-    - scipy==1.2.1
-    - biopython==1.73
-    - pysam==0.15.2
-    - git+https://github.com/svohr/mixemt.git
+    - git+https://github.com/alexhbnr/mixemt.git@python3

@@ -18,11 +18,14 @@ localrules: decompress_fasta, bwa_index, samtools_index
 
 
 rule all:
-    input: f"{PATH}/resources/NC_012920.fa.fai",
-           f"{PATH}/resources/NC_012920_1000.fa.fai",
-           f"{PATH}/resources/NC_012920_1000.fa.ann",
-           f"{PATH}/resources/haplogrep",
-           f"{PATH}/resources/contamMix/exec/estimate.R"
+    input: 
+        f"{PATH}/resources/NC_012920.fa.fai",
+        f"{PATH}/resources/NC_012920_1000.fa.fai",
+        f"{PATH}/resources/NC_012920_1000.fa.ann",
+        f"{PATH}/resources/haplogrep",
+        f"{PATH}/resources/contamMix/exec/estimate.R",
+        f"{PATH}/resources/install_contamMix.done",
+        f"{PATH}/resources/install_summary.done"
 
 # Prepare MT genome for analysis
 
@@ -30,7 +33,7 @@ rule decompress_fasta:
     output:
         "{PATH}/resources/NC_012920.fa"
     message: "De-compress the FastA sequence of the human MT genome with 1000 bp extension"
-    conda: f"{PATH}/env/mitoBench_setup_bioconda.yaml"
+    conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     shell:
         "gunzip -c {HUMAN_MT_FAS} > {output}"
@@ -40,7 +43,7 @@ rule extend_fasta:
         "{PATH}/resources/NC_012920.fa"
     output:
         "{PATH}/resources/NC_012920_1000.fa"
-    conda: f"{PATH}/env/mitoBench_setup_bioconda.yaml"
+    conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     shell:
         """
@@ -56,7 +59,7 @@ rule bwa_index:
     output:
         "{PATH}/resources/NC_012920_1000.fa.ann"
     message: "BWA index the FastA sequence of the human MT genome with 1000 bp extension"
-    conda: f"{PATH}/env/mitoBench_setup_bioconda.yaml"
+    conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     shell:
         "bwa index {input}"
@@ -67,7 +70,7 @@ rule samtools_index_extended:
     output:
         "{PATH}/resources/NC_012920_1000.fa.fai"
     message: "Samtools faidx the FastA sequence of the human MT genome with 1000 bp extension"
-    conda: f"{PATH}/env/mitoBench_setup_bioconda.yaml"
+    conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     shell:
         "samtools faidx {input}"
@@ -78,7 +81,7 @@ rule samtools_index:
     output:
         "{PATH}/resources/NC_012920.fa.fai"
     message: "Samtools faidx the FastA sequence of the human MT genome"
-    conda: f"{PATH}/env/mitoBench_setup_bioconda.yaml"
+    conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     shell:
         "samtools faidx {input}"
@@ -101,19 +104,26 @@ rule uncompress_contamMix:
     output:
         "{PATH}/resources/contamMix/exec/estimate.R"
     message: "Uncompress the tar ball of contamMix"
+    conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     params:
         tarball = f"{workflow.basedir}/resources/contamMix_1.0-10.tar.gz" 
     shell:
         "tar xvf {params.tarball}"
 
 rule install_contammix:
+    output:
+        "{PATH}/resources/install_contamMix.done"
     message: "Install R package of contamMix"
+    conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     params:
         tarball = f"{workflow.basedir}/resources/contamMix_1.0-10.tar.gz" 
-    run:
-        R("""
-        install.packages("{params.tarball}",
-                         type = "source",
-                         lib = .libPaths()[3])
-        """)
-    
+    script:
+        "scripts/install_contamMix.R" 
+
+rule install_summary:
+    output:
+        "{PATH}/resources/install_summary.done"
+    message: "Install R package used for the summary"
+    conda: f"{PATH}/env/mitoBench_bioconda.yaml"
+    script:
+        "scripts/install_summary.R" 

@@ -5,6 +5,7 @@ channels:
   - defaults
 dependencies:
   - python=3.7
+  - perl>5.26
   - pip>=20.0
   - adapterremoval>=2.3.1
   - bwa>=0.7.17

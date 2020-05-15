@@ -122,6 +122,7 @@ rule adapter_removal:
         basename = "tmp/{sample}",
         output_pe1 = "seqdata/{sample}_1.fastq.gz",
         output_pe2 = "seqdata/{sample}_2.fastq.gz",
+        qualitymax = config['qualitymax']
     shell:
         """
         if [[ "{params.seqtype}" = "2" ]]; then
@@ -139,7 +140,8 @@ rule adapter_removal:
                     --minadapteroverlap 1 \
                     --collapse \
                     --gzip \
-                    --threads {threads}
+                    --threads {threads} \
+                    --qualitymax {params.qualitymax}
             rm {params.input_pe2}
         else
             AdapterRemoval \
@@ -151,7 +153,8 @@ rule adapter_removal:
                     --minlength 30 \
                     --minquality 20 \
                     --gzip \
-                    --threads {threads}
+                    --threads {threads} \
+                    --qualitymax {params.qualitymax}
         fi
         rm -r {params.basename}*
         """

@@ -6,5 +6,6 @@
     "projdir" : "",
     "tmpdir" : "",
     "sampleIDconstraint" : "[A-Za-z0-9\\.]+",
-    "targetreads": 30000
+    "targetreads": 30000,
+    "qualitymax": 41
 }

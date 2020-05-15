@@ -112,7 +112,7 @@ rule uncompress_contamMix:
 
 rule install_contammix:
     output:
-        "{PATH}/resources/install_contamMix.done"
+        touch("{PATH}/resources/install_contamMix.done")
     message: "Install R package of contamMix"
     conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     params:
@@ -122,7 +122,7 @@ rule install_contammix:
 
 rule install_summary:
     output:
-        "{PATH}/resources/install_summary.done"
+        touch("{PATH}/resources/install_summary.done")
     message: "Install R package used for the summary"
     conda: f"{PATH}/env/mitoBench_bioconda.yaml"
     script:

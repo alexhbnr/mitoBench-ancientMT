@@ -3,3 +3,4 @@ NC_012920.fa*
 .snakemake
 resources/contamMix
 haplogrep*
+*.done

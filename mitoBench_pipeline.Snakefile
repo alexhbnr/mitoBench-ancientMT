@@ -125,7 +125,7 @@ rule adapter_removal:
     shell:
         """
         if [[ "{params.seqtype}" = "2" ]]; then
-            /projects1/mitoBench/conda/bin/AdapterRemoval \
+            AdapterRemoval \
                     --file1 {params.input_pe1} \
                     --file2 {params.input_pe2} \
                     --output1 {params.output_pe1} \
@@ -142,7 +142,7 @@ rule adapter_removal:
                     --threads {threads}
             rm {params.input_pe2}
         else
-            /projects1/mitoBench/conda/bin/AdapterRemoval \
+            AdapterRemoval \
                     --file1 {input.fq} \
                     --output1 {output.pe0} \
                     --settings {log} \
@@ -198,7 +198,7 @@ rule bwa_sampe:
     version: "0.3"
     params: 
         seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
-        reffa = "/projects1/mitoBench/resources/NC_012920_1000.fa",
+        reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
         readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample),
         input_pe1 = "seqdata/{sample}_1.fastq.gz",
         input_pe2 = "seqdata/{sample}_2.fastq.gz"
@@ -236,7 +236,7 @@ rule bwa_samse:
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     params:
-        reffa = "/projects1/mitoBench/resources/NC_012920_1000.fa",
+        reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
         readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample)
     threads: 2
     shell:
@@ -267,7 +267,7 @@ rule bam_merge_wrap_sort:
     version: "0.3"
     params:
         seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
-        reffa = f"/projects1/mitoBench/resources/NC_012920.fa"
+        reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
     threads: 5
     shell:
         """
@@ -352,7 +352,7 @@ rule bam2snpAD:
     version: "0.3"
     params:
         bam2snpAD = f"{workflow.basedir}/resources/snpAD-0.3.3/Bam2snpAD",
-        reffasta = "/projects1/mitoBench/resources//NC_012920.fa",
+        reffasta = f"{workflow.basedir}/resources/NC_012920_1000.fa",
         state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """

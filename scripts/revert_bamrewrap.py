@@ -2,7 +2,7 @@
 # Revert bam-wrap by removing multiple occurrences of reads
 import pysam
 
-if params.state == "Pass":
+if snakemake.params.state == "Pass":
     bamfile = pysam.AlignmentFile(snakemake.input[0])
     reads = []
     prevread = ""

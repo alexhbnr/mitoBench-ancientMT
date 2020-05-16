@@ -129,46 +129,17 @@ rule adapter_removal:
         seqtype = lambda wildcards: check_seqtype(wildcards.sample),
         input_pe1 = "seqdata/{sample}_1.raw_fastq.gz",
         input_pe2 = "seqdata/{sample}_2.raw_fastq.gz",
+        input_pe0 = "seqdata/{sample}_0.raw_fastq.gz",
         basename = "tmp/{sample}",
         output_pe1 = "seqdata/{sample}_1.fastq.gz",
         output_pe2 = "seqdata/{sample}_2.fastq.gz",
-        tmp_paired = "seqdata/{sample}_paired.fastq.gz",
-        tmp_single = "seqdata/{sample}_single.fastq.gz",
         qualitymax = config['qualitymax']
     shell:
         """
         if [[ "{params.seqtype}" = "3" ]]; then
-            AdapterRemoval \
-                    --file1 {params.input_pe1} \
-                    --file2 {params.input_pe2} \
-                    --output1 {params.output_pe1} \
-                    --output2 {params.output_pe2} \
-                    --outputcollapsed {params.tmp_paired} \
-                    --settings {params.basename}_paired.settings \
-                    --basename {params.basename} \
-                    --trimns --trimqualities \
-                    --minlength 30 \
-                    --minquality 20 \
-                    --minadapteroverlap 1 \
-                    --collapse \
-                    --gzip \
-                    --threads {threads} \
-                    --qualitymax {params.qualitymax}
-            #rm {params.input_pe2}
-            AdapterRemoval \
-                    --file1 {input.fq} \
-                    --output1 {params.tmp_single} \
-                    --settings {params.basename}_single.settings \
-                    --basename {params.basename} \
-                    --trimns --trimqualities \
-                    --minlength 30 \
-                    --minquality 20 \
-                    --gzip \
-                    --threads {threads} \
-                    --qualitymax {params.qualitymax}
-            cat {params.tmp_paired} {params.tmp_single} > {output.pe0}
-            #rm {params.tmp_paired} {params.tmp_single}
-            cat {params.basename}_{{paired,single}}.settings > {log}
+            ln -s ${{PWD}}/{params.input_pe1} {params.output_pe1}
+            ln -s ${{PWD}}/{params.input_pe2} {params.output_pe2}
+            ln -s ${{PWD}}/{params.input_pe0} {output.pe0}
         elif [[ "{params.seqtype}" = "2" ]]; then
             AdapterRemoval \
                     --file1 {params.input_pe1} \
@@ -187,6 +158,7 @@ rule adapter_removal:
                     --threads {threads} \
                     --qualitymax {params.qualitymax}
             rm {params.input_pe2}
+            rm -r {params.basename}*
         else
             AdapterRemoval \
                     --file1 {input.fq} \
@@ -199,8 +171,8 @@ rule adapter_removal:
                     --gzip \
                     --threads {threads} \
                     --qualitymax {params.qualitymax}
+            rm -r {params.basename}*
         fi
-        rm -r {params.basename}*
         """
 
 rule bwa_aln:

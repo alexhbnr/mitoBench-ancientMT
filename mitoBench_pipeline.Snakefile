@@ -38,6 +38,13 @@ PROJDIR = config['projdir']
 
 # Auxilliary functions
 
+def check_seqtype(sample):
+    """Returns the number of files after preparing the FastQs."""
+    if os.path.isfile(f"checkpoint/{sample}.seqtype"):
+        return next(open(f"checkpoint/{sample}.seqtype", "rt")).rstrip()
+    else:
+        return 0
+
 def check_state(fn):
     """Check whether sample passed the minimum number of reads."""
     if os.path.isfile(fn):
@@ -54,7 +61,10 @@ def mixemt_downsampling(flagstatfn, targetreads=config['targetreads']):
     if os.path.isfile(flagstatfn) and not os.stat(flagstatfn).st_size == 0:
         with open(flagstatfn, "rt") as flagstatfile:
             nreads = int(next(flagstatfile).split(" ")[0])
-        return "{:.4f}".format(targetreads / nreads)
+        if nreads > 0:
+            return "{:.4f}".format(targetreads / nreads)
+        else:
+            return 1.0
     else:
         return 1.0
 
@@ -67,7 +77,7 @@ localrules: determine_sequencing_type, flag_passedreads, seqdepth, contamMix_ali
 rule all:
     input:
         expand("{projdir}/{sample}/summary_table.csv", projdir=[PROJDIR], sample=SAMPLES),
-        expand("{projdir}/{sample}/{sample}.fa", projdir=[PROJDIR], sample=SAMPLES),
+        expand("{projdir}/{sample}/{sample}.flagstat", projdir=[PROJDIR], sample=SAMPLES),
 
 rule prepare_fastq:
     # Convert BAM files to FastQ or link FastQ files 
@@ -116,16 +126,50 @@ rule adapter_removal:
     threads: 8
     log: "logs/adapterremoval/{sample}.adapterremoval.log"
     params: 
-        seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
+        seqtype = lambda wildcards: check_seqtype(wildcards.sample),
         input_pe1 = "seqdata/{sample}_1.raw_fastq.gz",
         input_pe2 = "seqdata/{sample}_2.raw_fastq.gz",
         basename = "tmp/{sample}",
         output_pe1 = "seqdata/{sample}_1.fastq.gz",
         output_pe2 = "seqdata/{sample}_2.fastq.gz",
+        tmp_paired = "seqdata/{sample}_paired.fastq.gz",
+        tmp_single = "seqdata/{sample}_single.fastq.gz",
         qualitymax = config['qualitymax']
     shell:
         """
-        if [[ "{params.seqtype}" = "2" ]]; then
+        if [[ "{params.seqtype}" = "3" ]]; then
+            AdapterRemoval \
+                    --file1 {params.input_pe1} \
+                    --file2 {params.input_pe2} \
+                    --output1 {params.output_pe1} \
+                    --output2 {params.output_pe2} \
+                    --outputcollapsed {params.tmp_paired} \
+                    --settings {params.basename}_paired.settings \
+                    --basename {params.basename} \
+                    --trimns --trimqualities \
+                    --minlength 30 \
+                    --minquality 20 \
+                    --minadapteroverlap 1 \
+                    --collapse \
+                    --gzip \
+                    --threads {threads} \
+                    --qualitymax {params.qualitymax}
+            #rm {params.input_pe2}
+            AdapterRemoval \
+                    --file1 {input.fq} \
+                    --output1 {params.tmp_single} \
+                    --settings {params.basename}_single.settings \
+                    --basename {params.basename} \
+                    --trimns --trimqualities \
+                    --minlength 30 \
+                    --minquality 20 \
+                    --gzip \
+                    --threads {threads} \
+                    --qualitymax {params.qualitymax}
+            cat {params.tmp_paired} {params.tmp_single} > {output.pe0}
+            #rm {params.tmp_paired} {params.tmp_single}
+            cat {params.basename}_{{paired,single}}.settings > {log}
+        elif [[ "{params.seqtype}" = "2" ]]; then
             AdapterRemoval \
                     --file1 {params.input_pe1} \
                     --file2 {params.input_pe2} \
@@ -169,13 +213,13 @@ rule bwa_aln:
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     params:
-        seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
+        seqtype = lambda wildcards: check_seqtype(wildcards.sample),
         reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
         fastq = "seqdata/{sample}_{i}.fastq.gz"
     threads: 8
     shell:
         """
-        if [[ "{params.seqtype}" = "single" ]] && [[ "{wildcards.i}" -ne 0 ]]; then
+        if [[ "{params.seqtype}" -eq 1 ]] && [[ "{wildcards.i}" -ne 0 ]]; then
             touch {output}
         else
             bwa aln \
@@ -200,7 +244,7 @@ rule bwa_sampe:
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     params: 
-        seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
+        seqtype = lambda wildcards: check_seqtype(wildcards.sample),
         reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
         readgroup = lambda wildcards: r'@RG\tID:{sample}\tSM:{sample}\tPL:illumina'.format(sample = wildcards.sample),
         input_pe1 = "seqdata/{sample}_1.fastq.gz",
@@ -208,7 +252,7 @@ rule bwa_sampe:
     threads: 2
     shell:
         """
-        if [[ "{params.seqtype}" = "paired" ]]; then
+        if [[ "{params.seqtype}" -ge 2 ]]; then
             bwa sampe \
                 -r '{params.readgroup}' \
                 -f /dev/stdout \
@@ -269,12 +313,12 @@ rule bam_merge_wrap_sort:
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     params:
-        seqtype = lambda wildcards: SAMPLESLIST.loc[wildcards.sample, 'seqdatatype'] if config['seqdatatype'] == "fastq" else check_seqdatatype(f"checkpoint/{sample}.seqtype"),
+        seqtype = lambda wildcards: check_seqtype(wildcards.sample),
         reffa = f"{workflow.basedir}/resources/NC_012920_1000.fa",
     threads: 5
     shell:
         """
-        if [[ "{params.seqtype}" = "single" ]]; then
+        if [[ "{params.seqtype}" -eq 1 ]]; then
             samtools view -bh \
                 {input.bam_0} | \
             bam-rewrap MT:16569 | \
@@ -470,11 +514,7 @@ rule namesort_norewrap:
         state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """
-        if [[ {params.state} = "Pass" ]]; then
-            samtools sort -l 0 -n -o {output} {input.bam}
-        else
-            touch {output}
-        fi
+        samtools sort -l 0 -n -o {output} {input.bam}
         """
 
 rule revert_bamrewrap:
@@ -486,8 +526,6 @@ rule revert_bamrewrap:
     message: "Revert bam-wrap by removing multiple occurrences of reads for {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
-    params:
-        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     script:
         "scripts/revert_bamrewrap.py"
 
@@ -500,15 +538,9 @@ rule sort_norewrap:
     message: "Sort the BAM file after reverting bam-wrap by position: {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
-    params:
-        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """
-        if [[ {params.state} = "Pass" ]]; then
-            samtools sort -o {output} {input}
-        else
-            touch {output}
-        fi
+        samtools sort -o {output} {input}
         """
 
 rule flagstat:
@@ -520,15 +552,9 @@ rule flagstat:
     message: "Determine the number of aligned reads for {wildcards.sample}"
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
-    params:
-        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """
-        if [[ {params.state} = "Pass" ]]; then
-            samtools flagstat {input} > {output}
-        else
-            touch {output}
-        fi
+        samtools flagstat {input} > {output}
         """
 
 ################################################################################
@@ -825,9 +851,10 @@ rule contamMix_estimate:
     params:
         estimateR = f"{workflow.basedir}/resources/contamMix/exec/estimate.R",
         state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
-    threads: 36
+    threads: 16
     shell:
         """
+        unset R_LIBS
         if [[ {params.state} = "Pass" ]]; then
             Rscript {params.estimateR} \
                     --samFn {input.bam} \
@@ -857,6 +884,7 @@ rule summary:
     conda: f"{workflow.basedir}/env/mitoBench_bioconda.yaml"
     version: "0.3"
     params:
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag"),
         readlengthdist = "qual/{sample}/lgdistribution.txt"
     script:
         "scripts/summarise_sample.R"
@@ -865,9 +893,11 @@ rule copy_tmp_to_proj:
     input:
         "{projdir}/{sample}/summary_table.csv"
     output:
-        "{projdir}/{sample}/{sample}.fa"
+        "{projdir}/{sample}/{sample}.flagstat"
     message: "Copy results from tmp to project folder: {wildcards.sample}"
     version: "0.3"
+    params:
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """
         mkdir -p {PROJDIR}/{wildcards.sample}
@@ -875,20 +905,26 @@ rule copy_tmp_to_proj:
         cp -r seqdata/{wildcards.sample}_MTonly.sorted.rmdup.bam* {PROJDIR}/{wildcards.sample}/
         # DeDup logs
         cp -r logs/dedup/{wildcards.sample}_dedup.* {PROJDIR}/{wildcards.sample}/
-        # HaploGrep
-        cp logs/haplogrep2/{wildcards.sample}.hsd {PROJDIR}/{wildcards.sample}/
-        # MixEMT
-        cp logs/mixemt/{wildcards.sample}.* {PROJDIR}/{wildcards.sample}/
-        # DamageProfiler
-        cp qual/{wildcards.sample}/3pGtoA_freq.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_3pGtoA_freq.txt
-        cp qual/{wildcards.sample}/5pCtoT_freq.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_5pCtoT_freq.txt
-        cp qual/{wildcards.sample}/DamagePlot.pdf {PROJDIR}/{wildcards.sample}/{wildcards.sample}_DamagePlot.pdf
-        cp qual/{wildcards.sample}/Length_plot.pdf {PROJDIR}/{wildcards.sample}/{wildcards.sample}_Length_plot.pdf
-        cp qual/{wildcards.sample}/lgdistribution.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_lgdistribution.txt
-        cp qual/{wildcards.sample}/misincorporation.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_misincorporation.txt
-        # snpAD
-        cp snpAD/{wildcards.sample}.snpAD.vcf.gz* {PROJDIR}/{wildcards.sample}/
-        cp snpAD/{wildcards.sample}.snpAD.fasta {PROJDIR}/{wildcards.sample}/{wildcards.sample}.fa
+        # Seq depth
+        cp logs/seqdepth/{wildcards.sample}.seqdepth.csv {PROJDIR}/{wildcards.sample}/{wildcards.sample}.seqdepth.csv
+        # Flagstat
+        cp logs/flagstat/{wildcards.sample}.flagstat {PROJDIR}/{wildcards.sample}/{wildcards.sample}.flagstat
+        if [[ {params.state} = "Pass" ]]; then
+            # HaploGrep
+            cp logs/haplogrep2/{wildcards.sample}.hsd {PROJDIR}/{wildcards.sample}/
+            # MixEMT
+            cp logs/mixemt/{wildcards.sample}.* {PROJDIR}/{wildcards.sample}/
+            # DamageProfiler
+            cp qual/{wildcards.sample}/3pGtoA_freq.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_3pGtoA_freq.txt
+            cp qual/{wildcards.sample}/5pCtoT_freq.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_5pCtoT_freq.txt
+            cp qual/{wildcards.sample}/DamagePlot.pdf {PROJDIR}/{wildcards.sample}/{wildcards.sample}_DamagePlot.pdf
+            cp qual/{wildcards.sample}/Length_plot.pdf {PROJDIR}/{wildcards.sample}/{wildcards.sample}_Length_plot.pdf
+            cp qual/{wildcards.sample}/lgdistribution.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_lgdistribution.txt
+            cp qual/{wildcards.sample}/misincorporation.txt {PROJDIR}/{wildcards.sample}/{wildcards.sample}_misincorporation.txt
+            # snpAD
+            cp snpAD/{wildcards.sample}.snpAD.vcf.gz* {PROJDIR}/{wildcards.sample}/
+            cp snpAD/{wildcards.sample}.snpAD.fasta {PROJDIR}/{wildcards.sample}/{wildcards.sample}.fa
+        fi
         """
 
 # Clean temporary output

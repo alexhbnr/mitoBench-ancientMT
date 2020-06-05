@@ -72,7 +72,7 @@ def mixemt_downsampling(flagstatfn, targetreads=config['targetreads']):
 wildcard_constraints:
     sample = config['sampleIDconstraint']
 
-localrules: determine_sequencing_type, flag_passedreads, seqdepth, contamMix_align_against_consensus, summary, copy_tmp_to_proj
+localrules: determine_sequencing_type, flag_passedreads, seqdepth, contamMix_align_against_consensus, summary, copy_tmp_to_proj, clean_tmp
 
 rule all:
     input:
@@ -110,8 +110,12 @@ rule determine_sequencing_type:
     params:
         dir = "seqdata"
     run:
+        fqfns = glob(f"{params.dir}/{wildcards.sample}*.raw_fastq.gz")
+        fqfns = [fq for fq in fqfns
+                 if re.search(rf"{wildcards.sample}_[0-2].raw_fastq.gz",
+                              os.path.basename(fq))]
         with open(output[0], "wt") as outfile:
-            outfile.write(str(len(glob(f"{params.dir}/{wildcards.sample}*.raw_fastq.gz"))) + "\n")
+            outfile.write(str(len(fqfns)) + "\n")
 
 rule adapter_removal:
     # Run AdapterRemoval to trim adapters and merge overlapping reads
@@ -156,7 +160,8 @@ rule adapter_removal:
                     --collapse \
                     --gzip \
                     --threads {threads} \
-                    --qualitymax {params.qualitymax}
+                    --qualitybase solexa
+                    #--qualitymax {params.qualitymax}
             rm {params.input_pe2}
             rm -r {params.basename}*
         else
@@ -170,7 +175,8 @@ rule adapter_removal:
                     --minquality 20 \
                     --gzip \
                     --threads {threads} \
-                    --qualitymax {params.qualitymax}
+                    --qualitybase solexa
+                    #--qualitymax {params.qualitymax}
             rm -r {params.basename}*
         fi
         """
@@ -372,13 +378,14 @@ rule bam2snpAD:
     params:
         bam2snpAD = f"{workflow.basedir}/resources/snpAD-0.3.3/Bam2snpAD",
         reffasta = f"{workflow.basedir}/resources/NC_012920_1000.fa",
+        bq = config['snpADBQ'],
         state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
     shell:
         """
         if [[ {params.state} = "Pass" ]]; then
             {params.bam2snpAD} \
                     -Q 25 \
-                    -q 30 \
+                    -q {params.bq} \
                     -r MT \
                     -f {params.reffasta} \
                     {input.bam} > {output}
@@ -646,6 +653,7 @@ rule mixemt:
     version: "0.3"
     priority: -100
     resources: mixemt = 1
+    threads: 8
     params: 
         state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag"),
         subsampling = lambda wildcards: True if float(mixemt_downsampling(f"logs/flagstat/{wildcards.sample}.flagstat")) < 1 else False,
@@ -667,7 +675,7 @@ rule mixemt:
                 ln -s ${{PWD}}/{input.bam} {params.subbam}
             fi
             samtools index {params.subbam}
-            mixemt -q 25 -v -t \
+            mixemt -q 25 --threads {threads} -v -t \
                 {params.mixemtprefix} \
                 {params.subbam} \
                 > {output} \
@@ -739,7 +747,7 @@ rule contamMix_align_against_consensus:
                 samtools view -bh \
                      -s {params.subsampling_fraction} \
                      {input.bam} | \
-                samtools sort -n - | \
+                bam-fixpair -u - | \
                 samtools fastq \
                     -1 logs/contamMix/{wildcards.sample}/{wildcards.sample}_1.fastq.gz \
                     -2 logs/contamMix/{wildcards.sample}/{wildcards.sample}_2.fastq.gz \
@@ -822,7 +830,8 @@ rule contamMix_estimate:
     resources: contamMix = 1
     params:
         estimateR = f"{workflow.basedir}/resources/contamMix/exec/estimate.R",
-        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag")
+        state = lambda wildcards: check_state(f"results/{wildcards.sample}_nReads.flag"),
+        bq = config['snpADBQ'],
     threads: 16
     shell:
         """
@@ -831,6 +840,7 @@ rule contamMix_estimate:
             Rscript {params.estimateR} \
                     --samFn {input.bam} \
                     --malnFn {input.aln} \
+                    --baseq {params.bq} \
                     --nIter 15000 \
                     --tabOutput TRUE > {output}
         else

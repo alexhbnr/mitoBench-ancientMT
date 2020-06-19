@@ -160,8 +160,7 @@ rule adapter_removal:
                     --collapse \
                     --gzip \
                     --threads {threads} \
-                    --qualitybase solexa
-                    #--qualitymax {params.qualitymax}
+                    --qualitymax {params.qualitymax}
             rm {params.input_pe2}
             rm -r {params.basename}*
         else
@@ -175,8 +174,7 @@ rule adapter_removal:
                     --minquality 20 \
                     --gzip \
                     --threads {threads} \
-                    --qualitybase solexa
-                    #--qualitymax {params.qualitymax}
+                    --qualitymax {params.qualitymax}
             rm -r {params.basename}*
         fi
         """

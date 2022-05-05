@@ -1,0 +1,39 @@
+from glob import glob
+import os
+import re
+import sys
+from pathlib import Path
+#import shutil
+
+import pandas as pd
+import pyfastx
+from snakemake.utils import min_version
+
+min_version("7.0")
+
+configfile: "config/config.yaml"
+
+os.makedirs("snakemake_tmp", exist_ok=True)
+
+#### Samples ###################################################################
+SAMPLESLIST = pd.read_csv(config['samplelist'], sep="\t", index_col=['sample'])
+SAMPLES = SAMPLESLIST.index.tolist()
+################################################################################
+
+#### Include sub-workflows #####################################################
+include: "rules/prepare_refgenome.smk"
+include: "rules/prepare_seqdata.smk"
+include: "rules/adapterremoval.smk"
+include: "rules/alignment.smk"
+include: "rules/postalignment_processing.smk"
+################################################################################
+
+wildcard_constraints:
+    sample = config['sampleIDconstraint']
+
+rule all:
+    input:
+        expand("{resultdir}/results/{sample}_nReads.flag", resultdir=[config['projdir']], sample=SAMPLES)
+        
+
+

@@ -47,9 +47,9 @@ rule index_extend_reffa:
     wrapper:
         "v1.3.2/bio/samtools/faidx"
 
-if "bwa" in config['aligner']:
+if config['aligner'] == "bwaaln":
 
-    rule bwa_index_reffa:
+    rule bwa_index_reffa_ext:
         input:
             "{tmpdir}/refgenome/refgenome_ext.fa"
         output:
@@ -60,6 +60,21 @@ if "bwa" in config['aligner']:
             prefix = "{tmpdir}/refgenome/refgenome_ext"
         wrapper:
             "v1.3.2/bio/bwa/index"
+
+if config['aligner'] == "bwamem":
+
+    rule bwa_index_reffa:
+        input:
+            "{tmpdir}/refgenome/refgenome.fa"
+        output:
+            dummy = touch("{tmpdir}/refgenome/index_building.done"),
+            idx = "{tmpdir}/refgenome/refgenome.amb"
+        message: "Index the extended reference genome using BWA"
+        params:
+            prefix = "{tmpdir}/refgenome/refgenome"
+        wrapper:
+            "v1.3.2/bio/bwa/index"
+
 
 elif config['aligner'] == "bowtie2":
 

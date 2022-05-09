@@ -1,3 +1,17 @@
+def return_expected_haplogrep2_res(wildcards):
+    status = pd.read_csv(checkpoints.flag_passedreads.get(**wildcards).output[0],
+                         sep="\t")
+    passed_samples = status.loc[status['status'] == "pass"]['sample'].tolist()
+    print([f"{config['tmpdir']}/logs/haplogrep/{sample}.haplogrep2.tsv" for sample in passed_samples])
+    return [f"{config['tmpdir']}/logs/haplogrep/{sample}.haplogrep2.tsv" for sample in passed_samples]
+
+
+rule haplogroup:
+    input:
+        lambda wildcards: return_expected_haplogrep2_res(wildcards)
+    output:
+        touch("{tmpdir}/haplogroups.done")
+
 rule download_haplogrep:
     output:
         touch("{tmpdir}/haplogrep.installed") 

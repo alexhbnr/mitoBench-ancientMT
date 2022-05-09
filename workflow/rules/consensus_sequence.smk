@@ -1,12 +1,3 @@
-def return_expected_consensusseqs(wildcards):
-    flag = open(checkpoints.flag_passedreads.get(**wildcards).output[0],
-                "rt").readline().rstrip()
-    if flag == "Pass":
-        return f"{wildcards.tmpdir}/consensus_sequence/{wildcards.sample}.fa"
-    else:
-        return ""
-
-
 def chrname_refgenome(fn):
     for name, seq in pyfastx.Fasta(fn, build_index=False):
         break
@@ -20,8 +11,9 @@ def chrlength_refgenome(fn):
 
 
 def return_subsampling_frac_gt(wildcards):
-    depth_summary = pd.read_csv(checkpoints.summarise_depth.get(**wildcards).output[0], sep="\t")
-    median = depth_summary.iloc[0]['median']
+    status = pd.read_csv(checkpoints.flag_passedreads.get(**wildcards).output[0],
+                         sep="\t", index_col=['sample'])
+    median = status.at[wildcards.sample, 'median']
     if median > config['genotype_median']:
         return f"-s {config['genotype_median']/median:.6f}"
     else:

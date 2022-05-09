@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 #import shutil
 
+import allel
 import pandas as pd
 import pyfastx
 from snakemake.utils import min_version
@@ -26,14 +27,18 @@ include: "rules/prepare_seqdata.smk"
 include: "rules/adapterremoval.smk"
 include: "rules/alignment.smk"
 include: "rules/postalignment_processing.smk"
+include: "rules/consensus_sequence.smk"
+include: "rules/haplogroup.smk"
 ################################################################################
+
 
 wildcard_constraints:
     sample = config['sampleIDconstraint']
 
 rule all:
     input:
-        expand("{resultdir}/results/{sample}_nReads.flag", resultdir=[config['projdir']], sample=SAMPLES)
+        expand("{tmpdir}/logs/initial_alignment.tsv", tmpdir=[config['tmpdir']]),
+        expand("{tmpdir}/haplogroups.done", tmpdir=[config['tmpdir']])
         
 
 

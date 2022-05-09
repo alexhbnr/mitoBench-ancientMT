@@ -66,7 +66,7 @@ rule samtools_index_rmdup:
     wrapper:
         "v1.3.2/bio/samtools/index"
 
-checkpoint samtools_flagstat:
+rule samtools_flagstat:
     input:
         "{tmpdir}/seqdata/{sample}_MTonly.sorted.rmdup.bam"
     output:
@@ -86,33 +86,41 @@ rule samtools_depth:
     wrapper:
         "v1.3.2/bio/samtools/depth"
 
-checkpoint summarise_depth:
-    input:
-        "{tmpdir}/logs/depth/{sample}.depth"
-    output:
-        "{tmpdir}/logs/depth/{sample}.avg_depth"
-    message: "Summarise the depth: {wildcards.sample}"
-    run:
-        summary = pd.read_csv(input[0], sep="\t", header=None,
-                    names=['chrom', 'pos', 'depth']) \
-            .groupby(['chrom'])['depth'].agg(['mean', 'std', 'median']) \
-            .reset_index()
-        summary['median'] = summary['median'].astype(int)
-        summary.to_csv(output[0], sep="\t", index=False, float_format="%.2f")
-
 checkpoint flag_passedreads:
     input:
-        bai = "{tmpdir}/seqdata/{sample}_MTonly.sorted.rmdup.bam.bai",
-        flagstat = "{tmpdir}/logs/flagstat/{sample}.flagstat",
-        depth = "{tmpdir}/logs/depth/{sample}.avg_depth"
+        bai = expand("{tmpdir}/seqdata/{sample}_MTonly.sorted.rmdup.bam.bai", tmpdir=[config['tmpdir']], sample=SAMPLES),
+        flagstat = expand("{tmpdir}/logs/flagstat/{sample}.flagstat", tmpdir=[config['tmpdir']], sample=SAMPLES),
+        depth = expand("{tmpdir}/logs/depth/{sample}.depth", tmpdir=[config['tmpdir']], sample=SAMPLES)
     output:
-        "{tmpdir}/results/{sample}_nReads.flag"
-    message: "Determine whether to continue with the processing: {wildcards.sample}"
+        "{tmpdir}/logs/initial_alignment.tsv"
+    message: "Determine whether to continue with the processing"
     run:
-        with open(output[0], "wt") as outfile:
-            with open(input['flagstat'], "rt") as flagstatfile:
+        # Read flagstat results
+        flagstat = {}
+        for fn in input.flagstat:
+            with open(fn, "rt") as flagstatfile:
                 nreads = int(next(flagstatfile).split(" ")[0])
-                if nreads >= 500:
-                    outfile.write("Pass\n")
-                else:
-                    outfile.write("Fail\n")
+            sample = os.path.basename(fn).replace(".flagstat", "")
+            flagstat[sample] = nreads
+        flagstat = pd.DataFrame.from_dict(flagstat, orient="index", columns=['nReads']) \
+            .reset_index() \
+            .rename({'index': 'sample'}, axis=1)
+
+        # Read depth summary 
+        depth = pd.concat([pd.read_csv(fn, sep="\t", header=None,
+                                       names=['chrom', 'pos', 'depth'])
+                           .assign(sample=os.path.basename(fn).replace(".depth", ""))
+                           for fn in input.depth])
+        depth_summary =  depth \
+            .groupby(['sample', 'chrom'])['depth'].agg(['mean', 'std', 'median']) \
+            .reset_index() \
+            .drop(['chrom'], axis=1)
+        depth_summary['median'] = depth_summary['median'].astype(int)
+
+        # Merge
+        stats = flagstat.merge(depth_summary, how="left", on="sample")
+        stats['status'] = ['pass' if x >= config['n_aln_reads'] else 'fail'
+                           for x in stats['nReads']]
+        stats[['sample', 'status', 'nReads', 'median', 'mean', 'std']] \
+            .sort_values(['sample']) \
+            .to_csv(output[0], sep="\t", index=False, float_format="%.6f")

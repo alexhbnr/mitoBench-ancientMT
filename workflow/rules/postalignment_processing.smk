@@ -66,21 +66,47 @@ rule samtools_index_rmdup:
     wrapper:
         "v1.3.2/bio/samtools/index"
 
-rule samtools_flagstat:
+checkpoint samtools_flagstat:
     input:
         "{tmpdir}/seqdata/{sample}_MTonly.sorted.rmdup.bam"
     output:
-        "{tmpdir}/log/flagstat/{sample}.flagstat"
+        "{tmpdir}/logs/flagstat/{sample}.flagstat"
     message: "Run samtools flagstat: {wildcards.sample}"
     wrapper:
         "v1.3.2/bio/samtools/flagstat"
 
-rule flag_passedreads:
+rule samtools_depth:
     input:
-        bai = lambda wildcards: f"{config['tmpdir']}/seqdata/{wildcards.sample}_MTonly.sorted.rmdup.bam.bai",
-        flagstat = lambda wildcards: f"{config['tmpdir']}/log/flagstat/{wildcards.sample}.flagstat"
+        bams = "{tmpdir}/seqdata/{sample}_MTonly.sorted.rmdup.bam"
     output:
-        "{resultdir}/results/{sample}_nReads.flag"
+        "{tmpdir}/logs/depth/{sample}.depth"
+    message: "Run samtools depth: {wildcards.sample}"
+    params:
+        extra = "-a"
+    wrapper:
+        "v1.3.2/bio/samtools/depth"
+
+checkpoint summarise_depth:
+    input:
+        "{tmpdir}/logs/depth/{sample}.depth"
+    output:
+        "{tmpdir}/logs/depth/{sample}.avg_depth"
+    message: "Summarise the depth: {wildcards.sample}"
+    run:
+        summary = pd.read_csv(input[0], sep="\t", header=None,
+                    names=['chrom', 'pos', 'depth']) \
+            .groupby(['chrom'])['depth'].agg(['mean', 'std', 'median']) \
+            .reset_index()
+        summary['median'] = summary['median'].astype(int)
+        summary.to_csv(output[0], sep="\t", index=False, float_format="%.2f")
+
+checkpoint flag_passedreads:
+    input:
+        bai = "{tmpdir}/seqdata/{sample}_MTonly.sorted.rmdup.bam.bai",
+        flagstat = "{tmpdir}/logs/flagstat/{sample}.flagstat",
+        depth = "{tmpdir}/logs/depth/{sample}.avg_depth"
+    output:
+        "{tmpdir}/results/{sample}_nReads.flag"
     message: "Determine whether to continue with the processing: {wildcards.sample}"
     run:
         with open(output[0], "wt") as outfile:

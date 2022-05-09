@@ -1,0 +1,33 @@
+# Samples
+samplelist: "" 
+sampleIDconstraint: "[A-Za-z0-9\\.]+" # Python regular expression that restricts excepted sample names
+# Input data
+seqdatadir: ""
+seqdatatype: "fastq"
+seqdatasuffix: "fastq.gz"
+# Results
+projdir: ""
+tmpdir: ""
+# The reference genome
+reffa: "~/github/mitoBench-ancientMT/resources/NC_012920.fa"
+circular_extension: 1000
+# Sequencing data processing
+merge_overlapping: True
+fastp_adaptertrimming: True
+# Alignment
+aligner: "bwaaln"  # bwaaln, bwamem, bowtie2
+bwa_aln_params: "-n 0.01 -o 2 -l 16500"
+# De-duplication
+duplicate_removal: True  # dis-able when providing PCR amplified data
+# Quality criterion
+n_aln_reads: 500  # minimal number of aligned reads for continuing the analysis
+# Consensus calling
+genotype_downsampling: True
+genotype_median: 250  # target median depth of the genotyping BAM file
+genotyper: "snpAD"  # snpAD, freeBayes, bcftools
+genotype_minbq: 30
+genotype_minmq: 25
+genotype_mindepth: 3
+genotype_mingtqual: 50
+# Contamination estimates
+targetreads: 30000

@@ -152,6 +152,8 @@ elif config['aligner'] == "bwamem":
         message: "Align with BWA mem: {wildcards.sample}"
         resources:
             mem_gb = 8
+        params:
+                extra=r"-R '@RG\tID:{sample}\tSM:{sample}'"
         threads: 8
         wrapper:
             "v1.3.2/bio/bwa/mem"
@@ -178,6 +180,8 @@ elif config['aligner'] == "bwamem":
         message: "Align with BWA mem: {wildcards.sample}"
         resources:
             mem_gb = 8
+        params:
+                extra=r"-R '@RG\tID:{sample}\tSM:{sample}'"
         threads: 8
         wrapper:
             "v1.3.2/bio/bwa/mem"
